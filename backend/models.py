@@ -1,46 +1,45 @@
 from dataclasses import dataclass, field
 from typing import List
+from decimal import Decimal
 
 @dataclass
 class ServicioItem:
-    """Representa un único item dentro de un ticket de servicio."""
+    """Representa un único item con precisión decimal."""
     categoria: str
     nombre_especifico: str
-    precio_unitario: float
+    precio_unitario: Decimal
     cantidad: int = 1
-    descuento: float = 0.0
+    descuento: Decimal = Decimal("0.00")
 
     @property
-    def subtotal(self) -> float:
-        """Calcula el subtotal para este item."""
+    def subtotal(self) -> Decimal:
+        """Calcula el subtotal (precio - descuento) * cantidad."""
         precio_efectivo = self.precio_unitario - self.descuento
-        return precio_efectivo * self.cantidad
+        return (precio_efectivo * self.cantidad).quantize(Decimal("0.01"))
 
 @dataclass
 class Paciente:
-    """Representa los datos del paciente."""
     nombre: str
     dni: str
 
 @dataclass
 class Ticket:
-    """Representa un ticket completo con todos sus servicios y datos."""
     paciente: Paciente
     items: List[ServicioItem] = field(default_factory=list)
     metodo_pago: str = "Efectivo"
-    destino: str = "General" # Puede ser "General" o "Dental"
+    destino: str = "General"
 
     @property
-    def total_bruto(self) -> float:
-        """Suma de todos los subtotales sin descuento general."""
-        return sum(item.subtotal for item in self.items)
+    def total_bruto(self) -> Decimal:
+        """Suma de precios unitarios por cantidad."""
+        return sum((item.precio_unitario * item.cantidad) for item in self.items).quantize(Decimal("0.01"))
 
     @property
-    def descuento_total(self) -> float:
+    def descuento_total(self) -> Decimal:
         """Suma de todos los descuentos aplicados."""
-        return sum(item.descuento * item.cantidad for item in self.items)
+        return sum((item.descuento * item.cantidad) for item in self.items).quantize(Decimal("0.01"))
 
     @property
-    def total_final(self) -> float:
-        """Total final a pagar."""
-        return self.total_bruto
+    def total_final(self) -> Decimal:
+        """Monto final a pagar después de descuentos."""
+        return sum(item.subtotal for item in self.items).quantize(Decimal("0.01"))

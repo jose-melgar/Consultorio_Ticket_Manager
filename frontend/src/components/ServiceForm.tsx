@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 
-// --- INTERFACES PARA TIPADO ---
+// ... Interfaces existentes ...
 interface ServicioAPI {
   "ID_General"?: string;
   "ID_Dental"?: string;
@@ -10,179 +10,144 @@ interface ServicioAPI {
 }
 
 interface TicketItem {
-  id: string; // ID único para el item en el ticket (ej: DEN-001)
+  id: string;
   nombre: string;
   cantidad: number;
   precioUnitario: number;
-  descuento: number;
   subtotal: number;
 }
 
-// --- COMPONENTE PRINCIPAL ---
 const ServiceForm: React.FC = () => {
-  // --- ESTADOS DEL FORMULARIO Y DATOS ---
   const [patientName, setPatientName] = useState('');
   const [patientDNI, setPatientDNI] = useState('');
-
   const [catalogos, setCatalogos] = useState<{ general: ServicioAPI[], dental: ServicioAPI[] }>({ general: [], dental: [] });
   const [selectedDestino, setSelectedDestino] = useState<'general' | 'dental'>('general');
   const [selectedCategoria, setSelectedCategoria] = useState('');
-  const [selectedServicio, setSelectedServicio] = useState(''); // Estado para el Nombre Específico
-  const [cantidad, setCantidad] = useState(1);
-  const [descuento, setDescuento] = useState(0);
-
-  const [ticketItems, setTicketItems] = useState<TicketItem[]>([]); // Items agregados al ticket
+  const [selectedServicio, setSelectedServicio] = useState('');
+  const [cantidad, setCantidad] = useState<number>(1);
+  const [ticketItems, setTicketItems] = useState<TicketItem[]>([]);
   const [metodoPago, setMetodoPago] = useState('Efectivo');
 
-  // --- EFECTO PARA CARGAR DATOS DE LA API ---
   useEffect(() => {
     fetch('http://localhost:5000/api/catalogos')
       .then(response => response.json())
-      .then(data => setCatalogos(data))
-      .catch(error => console.error("Error al cargar catálogos:", error));
+      .then(data => setCatalogos(data));
   }, []);
 
-  // --- LÓGICA DE SELECTORES DINÁMICOS (MEMOIZED) ---
   const { categoriasDisponibles, serviciosDisponibles, servicioSeleccionadoInfo } = useMemo(() => {
     const catalogoActual = catalogos[selectedDestino] || [];
-    
-    // Categorías únicas
     const categorias = [...new Set(catalogoActual.map(s => s.Categoría))];
-    
-    // Servicios filtrados por categoría
-    const servicios = selectedCategoria 
-      ? catalogoActual.filter(s => s.Categoría === selectedCategoria)
-      : [];
-      
-    // Información completa del servicio seleccionado
-    const servicioInfo = selectedServicio
-      ? servicios.find(s => (s["ID_General"] || s["ID_Dental"]) === selectedServicio)
-      : undefined;
-
-    return { 
-      categoriasDisponibles: categorias, 
-      serviciosDisponibles: servicios,
-      servicioSeleccionadoInfo: servicioInfo
-    };
+    const servicios = selectedCategoria ? catalogoActual.filter(s => s.Categoría === selectedCategoria) : [];
+    const servicioInfo = selectedServicio ? servicios.find(s => (s["ID_General"] || s["ID_Dental"]) === selectedServicio) : undefined;
+    return { categoriasDisponibles: categorias, serviciosDisponibles: servicios, servicioSeleccionadoInfo: servicioInfo };
   }, [selectedDestino, selectedCategoria, selectedServicio, catalogos]);
 
-  // --- MANEJADORES DE EVENTOS ---
   const handleAddItem = () => {
-    if (!servicioSeleccionadoInfo || cantidad <= 0) {
-      alert("Por favor, seleccione un servicio válido y una cantidad mayor a cero.");
-      return;
-    }
-
+    if (!servicioSeleccionadoInfo || cantidad <= 0) return;
     const newItem: TicketItem = {
       id: servicioSeleccionadoInfo["ID_General"] || servicioSeleccionadoInfo["ID_Dental"]!,
       nombre: servicioSeleccionadoInfo["Nombre Específico"],
       cantidad: cantidad,
       precioUnitario: servicioSeleccionadoInfo["Precio Unitario"],
-      descuento: descuento,
-      subtotal: (servicioSeleccionadoInfo["Precio Unitario"] - descuento) * cantidad
+      subtotal: servicioSeleccionadoInfo["Precio Unitario"] * cantidad
     };
-
-    setTicketItems(prevItems => [...prevItems, newItem]);
-
-    // Resetear campos del item
+    setTicketItems(prev => [...prev, newItem]);
     setSelectedServicio('');
     setCantidad(1);
-    setDescuento(0);
   };
-  
-  const handleFinalizarVenta = () => {
-      // Lógica para enviar los datos al backend
-      console.log("Venta finalizada. Datos a enviar:");
-      console.log({
-          paciente: { nombre: patientName, dni: patientDNI },
-          items: ticketItems,
-          metodoPago: metodoPago,
-          destino: selectedDestino
-      });
-      // Aquí iría la llamada fetch con método POST al backend
-  }
 
-  // --- CÁLCULO DEL TOTAL ---
-  const totalTicket = useMemo(() => {
-    return ticketItems.reduce((acc, item) => acc + item.subtotal, 0);
-  }, [ticketItems]);
+  const handleFinalizarVenta = async () => {
+    const ventaData = {
+      paciente: { nombre: patientName, dni: patientDNI },
+      items: ticketItems.map(item => ({ id: item.id, nombre: item.nombre, cantidad: item.cantidad })),
+      metodo_pago: metodoPago,
+      destino: selectedDestino
+    };
+
+    try {
+      const response = await fetch('http://localhost:5000/api/registrar-venta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ventaData)
+      });
+
+      if (response.ok) {
+          const result = await response.json();
+          alert(`Ticket ${result.ticket_id} guardado correctamente en la carpeta Tickets.`);
+          // Limpiar formulario
+          setTicketItems([]);
+          setPatientName('');
+          setPatientDNI('');
+      } else {
+          alert("Error al registrar la venta.");
+      }
+    } catch (error) {
+      alert("Error de conexión con el servidor.");
+    }
+  };
+
+  const totalTicket = useMemo(() => ticketItems.reduce((acc, item) => acc + item.subtotal, 0), [ticketItems]);
 
   return (
-    <div>
-      {/* SECCIÓN DATOS DEL PACIENTE */}
+    <div className="form-container">
       <fieldset>
         <legend>Datos del Paciente</legend>
-        <label>Nombre: <input type="text" value={patientName} onChange={e => setPatientName(e.target.value)} required /></label>
-        <label>DNI: <input type="text" value={patientDNI} onChange={e => setPatientDNI(e.target.value)} maxLength={8} required /></label>
+        <label>Nombre: <input type="text" value={patientName} onChange={e => setPatientName(e.target.value)} /></label>
+        <label>DNI: <input type="text" value={patientDNI} onChange={e => setPatientDNI(e.target.value)} maxLength={8} /></label>
       </fieldset>
 
-      {/* SECCIÓN PARA AÑADIR SERVICIOS */}
       <fieldset>
         <legend>Añadir Servicio</legend>
         <label>Destino:
-          <select value={selectedDestino} onChange={e => setSelectedDestino(e.target.value as 'general' | 'dental')}>
-            <option value="general">Las Marianas (General)</option>
+          <select value={selectedDestino} onChange={e => { setSelectedDestino(e.target.value as any); setSelectedCategoria(''); setSelectedServicio(''); }}>
+            <option value="general">Las Marianas</option>
             <option value="dental">Dental</option>
           </select>
         </label>
         <label>Categoría:
-          <select value={selectedCategoria} onChange={e => setSelectedCategoria(e.target.value)} disabled={!categoriasDisponibles.length}>
+          <select value={selectedCategoria} onChange={e => setSelectedCategoria(e.target.value)}>
             <option value="">Seleccione...</option>
             {categoriasDisponibles.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </label>
-        <label>Nombre Específico:
-          <select value={selectedServicio} onChange={e => setSelectedServicio(e.target.value)} disabled={!serviciosDisponibles.length}>
+        <label>Servicio:
+          <select value={selectedServicio} onChange={e => setSelectedServicio(e.target.value)}>
             <option value="">Seleccione...</option>
             {serviciosDisponibles.map(s => <option key={s["ID_General"] || s["ID_Dental"]} value={s["ID_General"] || s["ID_Dental"]}>{s["Nombre Específico"]}</option>)}
           </select>
         </label>
-        <label>Cantidad: <input type="number" value={cantidad} onChange={e => setCantidad(Number(e.target.value))} min="1" /></label>
-        <label>Descuento (S/.): <input type="number" value={descuento} onChange={e => setDescuento(Number(e.target.value))} min="0" /></label>
-        <button type="button" onClick={handleAddItem} disabled={!selectedServicio}>Añadir al Ticket</button>
+        <label>Cantidad: 
+          <input 
+            type="number" 
+            value={cantidad === 0 ? '' : cantidad} 
+            onChange={e => setCantidad(e.target.value === '' ? 0 : Number(e.target.value))} 
+            onFocus={(e) => e.target.select()} // Soluciona el problema de sobreescritura rápida
+            min="1" 
+          />
+        </label>
+        <button type="button" onClick={handleAddItem} disabled={!selectedServicio}>Añadir</button>
       </fieldset>
-      
-      {/* SECCIÓN DESGLOSE DEL TICKET */}
+
       <fieldset>
-        <legend>Ticket Actual</legend>
+        <legend>Resumen</legend>
         <table>
-          <thead>
-            <tr>
-              <th>Nombre</th>
-              <th>Cant.</th>
-              <th>P. Unit.</th>
-              <th>Desc.</th>
-              <th>Subtotal</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Servicio</th><th>Cant.</th><th>Total</th></tr></thead>
           <tbody>
-            {ticketItems.map((item, index) => (
-              <tr key={index}>
-                <td>{item.nombre}</td>
-                <td>{item.cantidad}</td>
-                <td>S/. {item.precioUnitario.toFixed(2)}</td>
-                <td>S/. {item.descuento.toFixed(2)}</td>
-                <td>S/. {item.subtotal.toFixed(2)}</td>
-              </tr>
+            {ticketItems.map((item, i) => (
+              <tr key={i}><td>{item.nombre}</td><td>{item.cantidad}</td><td>S/. {item.subtotal.toFixed(2)}</td></tr>
             ))}
           </tbody>
         </table>
         <h3>Total: S/. {totalTicket.toFixed(2)}</h3>
-      </fieldset>
-      
-      {/* SECCIÓN FINALIZAR VENTA */}
-      <fieldset>
-        <legend>Finalizar Venta</legend>
-        <label>Método de Pago:
+        <label>Pago:
           <select value={metodoPago} onChange={e => setMetodoPago(e.target.value)}>
             <option value="Efectivo">Efectivo</option>
             <option value="Yape">Yape</option>
             <option value="Plin">Plin</option>
             <option value="Tarjeta">Tarjeta</option>
-            <option value="Transferencia">Transferencia</option>
           </select>
         </label>
-        <button type="button" onClick={handleFinalizarVenta} disabled={!ticketItems.length || !patientName || !patientDNI}>Generar Ticket</button>
+        <button onClick={handleFinalizarVenta} disabled={!ticketItems.length || !patientName}>Generar Ticket</button>
       </fieldset>
     </div>
   );

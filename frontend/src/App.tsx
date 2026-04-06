@@ -11,7 +11,7 @@ const App: React.FC = () => {
   return (
     <div className="app-container">
       <header className="app-header">
-        <h1>Consultorio Ticket Manager</h1>
+        <h1>Consultorio Las Marianas</h1>
       </header>
 
       {/* --- Pestañas de Navegación --- */}
