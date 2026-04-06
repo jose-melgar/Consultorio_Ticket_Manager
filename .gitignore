@@ -1,0 +1,32 @@
+# Ignorar node_modules en el frontend
+frontend/node_modules/
+frontend/package-lock.json
+frontend/package.json
+
+# Ignorar el entorno virtual de Python
+venv/
+
+# Ignorar archivos de construcción (frontend y backend)
+dist/
+build/
+
+# Ignorar archivos generados localmente
+*.log
+debug.log
+npm-debug.log*
+
+# Ignorar dependencias del backend (que se regeneran desde requirements.txt)
+__pycache__/
+*.py[cod]
+
+# Ignorar compilación de TypeScript (generación de .js y carpetas dist)
+frontend/src/**/*.js
+frontend/src/**/*.js.map
+*.tsbuildinfo
+
+# Ignorar configuración de IDEs y sistemas
+*.env
+.DS_Store
+.vscode/
+.idea/
+*.swp
