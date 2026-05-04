@@ -27,8 +27,10 @@ const ServiceForm: React.FC = () => {
   const [cantidad, setCantidad] = useState<number>(1);
   const [ticketItems, setTicketItems] = useState<TicketItem[]>([]);
   const [metodoPago, setMetodoPago] = useState('Efectivo');
+  
+  // Nuevo Estado para Observaciones
+  const [observaciones, setObservaciones] = useState('');
 
-  // Nuevos estados para el Descuento Especial
   const [hasSpecialDiscount, setHasSpecialDiscount] = useState(false);
   const [specialDiscountType, setSpecialDiscountType] = useState<'percent' | 'fixed'>('percent');
   const [specialDiscountValue, setSpecialDiscountValue] = useState<number | ''>('');
@@ -62,7 +64,6 @@ const ServiceForm: React.FC = () => {
     setCantidad(1);
   };
 
-  // Cálculo de totales dinámicos
   const subtotalServicios = useMemo(() => ticketItems.reduce((acc, item) => acc + item.subtotal, 0), [ticketItems]);
   
   const totalCalculado = useMemo(() => {
@@ -75,7 +76,7 @@ const ServiceForm: React.FC = () => {
         total = subtotalServicios - val;
       }
     }
-    return Math.max(0, total); // Evita valores negativos
+    return Math.max(0, total);
   }, [subtotalServicios, hasSpecialDiscount, specialDiscountType, specialDiscountValue]);
 
   const handleFinalizarVenta = async (e: React.FormEvent) => {
@@ -92,11 +93,11 @@ const ServiceForm: React.FC = () => {
       items: ticketItems.map(item => ({ id: item.id, nombre: item.nombre, cantidad: item.cantidad })),
       metodo_pago: metodoPago,
       destino: selectedDestino,
-      // Datos del descuento
       descuento_especial_activo: hasSpecialDiscount,
       descuento_especial_tipo: specialDiscountType,
       descuento_especial_valor: Number(specialDiscountValue) || 0,
-      descuento_especial_razon: specialDiscountReason
+      descuento_especial_razon: specialDiscountReason,
+      observaciones: observaciones // Se envía al backend
     };
 
     try {
@@ -108,14 +109,14 @@ const ServiceForm: React.FC = () => {
 
       if (response.ok) {
           const result = await response.json();
-          alert(`Ticket ${result.ticket_id} guardado correctamente y enviado a impresión.`);
-          // Limpiar formulario
+          alert(`Ticket ${result.ticket_id} generado correctamente.`);
           setTicketItems([]);
           setPatientName('');
           setPatientDNI('');
           setHasSpecialDiscount(false);
           setSpecialDiscountValue('');
           setSpecialDiscountReason('');
+          setObservaciones('');
       } else {
           alert("Error al registrar la venta.");
       }
@@ -153,7 +154,7 @@ const ServiceForm: React.FC = () => {
               {serviciosDisponibles.map(s => <option key={s["ID_General"] || s["ID_Dental"]} value={s["ID_General"] || s["ID_Dental"]}>{s["Nombre Específico"]}</option>)}
             </select>
           </label>
-          <label>Cantidad: 
+          <label>Cantidad (Sesiones / Insumos / Atenciones): 
             <input 
               type="number" 
               value={cantidad === 0 ? '' : cantidad} 
@@ -165,7 +166,6 @@ const ServiceForm: React.FC = () => {
           <button type="button" onClick={handleAddItem} disabled={!selectedServicio}>Añadir</button>
         </fieldset>
 
-        {/* --- NUEVA SECCIÓN DE DESCUENTO ESPECIAL --- */}
         <fieldset className="special-discount-section">
           <legend>
             <input 
@@ -210,6 +210,18 @@ const ServiceForm: React.FC = () => {
               />
             </div>
           )}
+        </fieldset>
+
+        {/* --- NUEVA SECCIÓN DE OBSERVACIONES --- */}
+        <fieldset>
+          <legend>Observaciones Adicionales</legend>
+          <textarea 
+             placeholder="Escriba aquí los detalles del tratamiento, medicinas entregadas o anotaciones para la contabilidad..."
+             value={observaciones}
+             onChange={(e) => setObservaciones(e.target.value)}
+             className="observaciones-input"
+             rows={3}
+          />
         </fieldset>
 
         <fieldset>

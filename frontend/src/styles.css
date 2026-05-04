@@ -231,3 +231,18 @@ h3 {
   color: white;
   font-weight: bold;
 }
+
+/* Textarea de Observaciones */
+.observaciones-input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-sizing: border-box;
+  font-family: inherit;
+  resize: vertical; /* Permite estirar solo hacia abajo */
+}
+.observaciones-input:focus {
+  outline: none;
+  border-color: var(--dark-blue);
+}

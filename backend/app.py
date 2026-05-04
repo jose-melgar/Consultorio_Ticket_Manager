@@ -1,5 +1,6 @@
 import os
 import subprocess
+import pandas as pd
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from decimal import Decimal
@@ -7,7 +8,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from models import Ticket, Paciente, ServicioItem
-from catalog_manager import cargar_catalogos, generar_nuevos_ids, registrar_venta_csv, guardar_historial_json, leer_historial_ventas
+# Eliminamos la referencia a registrar_venta_csv
+from catalog_manager import cargar_catalogos, generar_nuevos_ids, registrar_venta_excel, guardar_historial_json, leer_historial_ventas
 from pdf_generator import generar_ticket_pdf
 
 load_dotenv()
@@ -41,8 +43,8 @@ def serve_static(path):
 @app.route("/api/catalogos", methods=["GET"])
 def get_catalogos():
     return jsonify({
-        "general": CATALOGOS["General"].to_dict(orient="records"),
-        "dental": CATALOGOS["Dental"].to_dict(orient="records")
+        "general": CATALOGOS["General"].fillna(0).to_dict(orient="records"),
+        "dental": CATALOGOS["Dental"].fillna(0).to_dict(orient="records")
     })
 
 @app.route("/api/tickets", methods=["GET"])
@@ -59,23 +61,28 @@ def registrar():
         
         items_objs = []
         for it in data["items"]:
-            # Cambié 'Categoría' a 'Servicio' o lo que uses en tu Excel (usa la col correspondiente al servicio)
-            # Asumo que catalog_manager usa 'Categoría' para agrupar y 'Nombre Específico'
             row = cat[cat[id_col] == it["id"]].iloc[0]
+            
+            costo = row.get("Costo", 0)
+            if pd.isna(costo): costo = 0
+
+            descuento_item = row.get("Descuento", 0)
+            if pd.isna(descuento_item): descuento_item = 0
+
             items_objs.append(ServicioItem(
                 categoria=row.get("Categoría", ""),
                 nombre_especifico=it["nombre"],
                 precio_unitario=Decimal(str(row["Precio Unitario"])),
+                costo_unitario=Decimal(str(costo)),
                 cantidad=int(it["cantidad"]),
-                descuento=Decimal("0.00")
+                descuento=Decimal(str(descuento_item))
             ))
 
         ticket = Ticket(paciente=paciente, items=items_objs, metodo_pago=data["metodo_pago"], destino=destino)
         id_glob, id_esp = generar_nuevos_ids(destino)
         
-        # --- LÓGICA DE DESCUENTO ESPECIAL ---
         subtotal_servicios = sum(i.subtotal for i in items_objs)
-        monto_descuento = Decimal("0.00")
+        monto_descuento_especial = Decimal("0.00")
         
         desc_activo = data.get("descuento_especial_activo", False)
         desc_tipo = data.get("descuento_especial_tipo", "percent")
@@ -84,15 +91,15 @@ def registrar():
 
         if desc_activo and desc_valor > 0:
             if desc_tipo == 'percent':
-                monto_descuento = subtotal_servicios * (desc_valor / Decimal("100"))
+                monto_descuento_especial = subtotal_servicios * (desc_valor / Decimal("100"))
             else:
-                monto_descuento = desc_valor
+                monto_descuento_especial = desc_valor
                 
-        total_final_calculado = max(Decimal("0.00"), subtotal_servicios - monto_descuento)
+        total_final_calculado = max(Decimal("0.00"), subtotal_servicios - monto_descuento_especial)
         
-        # Reemplazamos el total del ticket antes de ir a registrar al CSV
         ticket.total_final = total_final_calculado 
-        registrar_venta_csv(ticket, id_glob, id_esp)
+        
+        # Eliminamos la línea registrar_venta_csv y pasamos id_esp al excel
         
         venta_final = {
             "id_ticket_global": id_glob,
@@ -104,14 +111,18 @@ def registrar():
             "descuento_especial_activo": desc_activo,
             "descuento_especial_tipo": desc_tipo,
             "descuento_especial_valor": str(desc_valor),
-            "descuento_especial_monto_soles": str(monto_descuento),
+            "descuento_especial_monto_soles": str(monto_descuento_especial),
             "descuento_especial_razon": desc_razon,
+            "observaciones": data.get("observaciones", ""),
             "total_final": str(total_final_calculado),
             "metodo_pago": ticket.metodo_pago,
             "destino": ticket.destino,
             "atendido_por": "José Melgar"
         }
 
+        # Guardar en el Excel Maestro de Contabilidad pasándole ambos IDs
+        registrar_venta_excel(ticket, id_glob, id_esp, venta_final)
+        
         guardar_historial_json(venta_final)
         
         nombre_limpio = "".join(x for x in paciente.nombre if x.isalnum() or x == " ").replace(" ", "_").upper()

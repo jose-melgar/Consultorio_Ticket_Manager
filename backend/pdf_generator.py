@@ -32,7 +32,6 @@ def generar_ticket_pdf(data: dict) -> bytes:
     palabras_nombre = data['paciente']['nombre'].split()
     lineas_nombre = (len(palabras_nombre) + 1) // 2 
     
-    # Alto dinámico ajustado (logo, paciente, items y espacio para descuento)
     lineas_descuento = 8 if data.get('descuento_especial_activo') else 0
     alto_ajustado = 110 + (lineas_nombre * 5) + (len(data['items']) * 6) + lineas_descuento
     
@@ -71,7 +70,6 @@ def generar_ticket_pdf(data: dict) -> bytes:
 
     pdf.ln(2)
     
-    # --- SECCIÓN DE DESGLOSE FINANCIERO ---
     if data.get('descuento_especial_activo'):
         subtotal = float(data.get('subtotal_servicios', 0))
         pdf.set_font('Helvetica', '', 8)

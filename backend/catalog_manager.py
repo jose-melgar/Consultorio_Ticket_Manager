@@ -4,16 +4,14 @@ import json
 from datetime import datetime
 from typing import List, Dict
 from decimal import Decimal
+from openpyxl import load_workbook
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 CATALOGO_GENERAL = os.path.join(DATA_DIR, "Lista de Precios-Las Marianas.xlsx")
 CATALOGO_DENTAL = os.path.join(DATA_DIR, "Lista de Precios-Dental.xlsx")
 HISTORIAL_JSON = os.path.join(DATA_DIR, "ventas.json")
 ID_COUNTER_FILE = os.path.join(DATA_DIR, "id_counters.json")
-
-# Archivos de registro en CSV para evitar bloqueos de Excel
-REGISTRO_CSV_GEN = os.path.join(DATA_DIR, "Ventas-Las Marianas.csv")
-REGISTRO_CSV_DEN = os.path.join(DATA_DIR, "Ventas-Dental.csv")
+LIBRO_CONTABLE = os.path.join(DATA_DIR, "Contabilidad_Marianas.xlsx")
 
 def cargar_catalogos():
     return {
@@ -41,25 +39,84 @@ def generar_nuevos_ids(destino: str):
         json.dump(counters, f)
     return id_glob, id_esp
 
-def registrar_venta_csv(ticket, id_global, id_especifico):
-    archivo = REGISTRO_CSV_GEN if ticket.destino.lower() == 'general' else REGISTRO_CSV_DEN
+def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
+    """
+    Registra la venta en el formato de Contabilidad (Libro de Ingresos y Egresos).
+    """
+    columnas = [
+        "Fecha", "nota de venta", "Pago", "Descripción", "A cuenta", 
+        "ingresos", "Egresos - gastos", "LABORATORIO", "Insumos de lab", 
+        "Ganancia", "Saldos", "observaciones"
+    ]
     
+    fecha = datetime.now().strftime("%d.%m.%y")
+    
+    # Combinamos ambos IDs para saber el número global y la rama (Ej: TK-0001 | DEN-0001)
+    num_nota = f"{id_global} | {id_especifico}"
+    
+    # Manejo de iniciales de Pago
+    if ticket.metodo_pago.lower() == 'efectivo': pago = 'E'
+    elif ticket.metodo_pago.lower() == 'yape': pago = 'Y'
+    elif ticket.metodo_pago.lower() == 'plin': pago = 'P'
+    elif ticket.metodo_pago.lower() == 'tarjeta': pago = 'T'
+    else: pago = ticket.metodo_pago[0].upper()
+
+    descripcion_items = ", ".join([f"{item.nombre_especifico} {item.cantidad}" for item in ticket.items])
+    ingresos = float(ticket.total_final)
+    
+    egresos_servicios = 0.0
+    egresos_insumos = 0.0
+    
+    for item in ticket.items:
+        if "insumo" in item.categoria.lower() or "medicamento" in item.categoria.lower():
+            egresos_insumos += float(item.costo_unitario) * item.cantidad
+        else:
+            egresos_servicios += float(item.costo_unitario) * item.cantidad
+
+    # Cálculo de ganancia
+    ganancia = ingresos - egresos_servicios - egresos_insumos
+    
+    # Calcular Saldo
+    saldo_anterior = 0.0
+    if os.path.exists(LIBRO_CONTABLE):
+        try:
+            df_existente = pd.read_excel(LIBRO_CONTABLE)
+            if not df_existente.empty and pd.notna(df_existente["Saldos"].iloc[-1]):
+                saldo_anterior = float(df_existente["Saldos"].iloc[-1])
+        except Exception as e:
+            print(f"Aviso al leer Saldo: {e}")
+            
+    nuevo_saldo = saldo_anterior + ganancia 
+
+    obs = venta_final.get('observaciones', '')
+    if venta_final.get('descuento_especial_activo'):
+        obs += f" | Desc: {venta_final['descuento_especial_razon']}"
+
     nueva_fila = {
-        'Fecha': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'ID_Global': id_global,
-        'ID_Especifico': id_especifico,
-        'Paciente': ticket.paciente.nombre,
-        'DNI': ticket.paciente.dni,
-        'Monto_Final': float(ticket.total_final),
-        'Metodo_Pago': ticket.metodo_pago
+        "Fecha": fecha,
+        "nota de venta": num_nota,
+        "Pago": pago,
+        "Descripción": descripcion_items,
+        "A cuenta": 0,
+        "ingresos": ingresos,
+        "Egresos - gastos": 0,  # Se deja en 0 como indicaste
+        "LABORATORIO": egresos_servicios, # El costo de consultas/procedimientos va aquí
+        "Insumos de lab": egresos_insumos,
+        "Ganancia": ganancia,
+        "Saldos": nuevo_saldo,
+        "observaciones": obs
     }
-    
-    df = pd.DataFrame([nueva_fila])
-    header = not os.path.exists(archivo)
-    df.to_csv(archivo, mode='a', index=False, header=header, encoding='utf-8-sig')
+
+    if not os.path.exists(LIBRO_CONTABLE):
+        df = pd.DataFrame([nueva_fila], columns=columnas)
+        df.to_excel(LIBRO_CONTABLE, index=False)
+    else:
+        with pd.ExcelWriter(LIBRO_CONTABLE, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
+            df_nuevo = pd.DataFrame([nueva_fila])
+            start_row = writer.sheets['Sheet1'].max_row
+            df_nuevo.to_excel(writer, index=False, header=False, startrow=start_row)
 
 def guardar_historial_json(venta_data):
-    # Convertimos Decimals a string para que JSON sea compatible
     def default_serializer(obj):
         if isinstance(obj, Decimal): return str(obj)
         raise TypeError
