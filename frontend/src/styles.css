@@ -1,9 +1,18 @@
+/* --- Variables de Color Pastel Basadas en el Logo --- */
+:root {
+  --bg-color: #f4f9fb;
+  --dark-blue: #3d6a8b;    /* Centro Médico Laboral */
+  --light-blue: #87b9d9;   /* LAS MARIANAS */
+  --white: #ffffff;
+  --border-color: #dceef2;
+}
+
 /* --- Estilos Generales --- */
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   margin: 0;
   padding: 0;
-  background-color: #f4f7f9;
+  background-color: var(--bg-color);
   color: #333;
 }
 
@@ -11,20 +20,49 @@ body {
   max-width: 900px;
   margin: 20px auto;
   padding: 20px;
-  background-color: #ffffff;
+  background-color: var(--white);
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
-.app-header h1 {
-  text-align: center;
-  color: #2c3e50;
+/* --- Encabezado con Logo y Título --- */
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 15px;
   margin-bottom: 25px;
+  border-bottom: 3px solid var(--light-blue);
+}
+
+.logo-container img {
+  height: 65px;
+  width: auto;
+}
+
+.header-title {
+  text-align: right;
+  line-height: 1.1;
+}
+
+.title-top {
+  display: block;
+  color: var(--dark-blue);
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.title-bottom {
+  display: block;
+  color: var(--light-blue);
+  font-weight: 800;
+  font-size: 2rem;
+  text-transform: uppercase;
 }
 
 /* --- Estilos para Fieldsets y Formularios --- */
 fieldset {
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 20px;
   margin-bottom: 25px;
@@ -32,7 +70,7 @@ fieldset {
 
 legend {
   font-weight: 600;
-  color: #007bff;
+  color: var(--dark-blue);
   padding: 0 10px;
 }
 
@@ -49,13 +87,13 @@ select {
   padding: 10px;
   border: 1px solid #ccc;
   border-radius: 4px;
-  box-sizing: border-box; /* Asegura que el padding no afecte el ancho total */
+  box-sizing: border-box;
   margin-top: 4px;
 }
 
 /* --- Estilos para Botones --- */
 button {
-  background-color: #007bff;
+  background-color: var(--dark-blue);
   color: white;
   border: none;
   padding: 12px 20px;
@@ -67,7 +105,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background-color: #0056b3;
+  background-color: var(--light-blue);
 }
 
 button:disabled {
@@ -100,7 +138,7 @@ td:nth-child(2), td:nth-child(3), td:nth-child(4), td:nth-child(5) {
 h3 {
   text-align: right;
   font-size: 1.5em;
-  color: #2c3e50;
+  color: var(--dark-blue);
   margin-top: 15px;
 }
 
@@ -109,45 +147,6 @@ h3 {
   margin-top: 30px;
   font-size: 0.9em;
   color: #777;
-}
-
-/* --- Estilos para la Vista de Historial de Tickets --- */
-.ticket-history-container h2 {
-  color: #2c3e50;
-  border-bottom: 2px solid #007bff;
-  padding-bottom: 10px;
-  margin-bottom: 20px;
-}
-
-.history-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 20px;
-}
-
-.history-table th,
-.history-table td {
-  border: 1px solid #e0e0e0;
-  padding: 12px;
-  text-align: left;
-  vertical-align: middle;
-}
-
-.history-table thead {
-  background-color: #f8f9fa;
-}
-
-.history-table th {
-  font-weight: 600;
-  color: #343a40;
-}
-
-.history-table tbody tr:nth-child(even) {
-  background-color: #f8f9fa;
-}
-
-.history-table tbody tr:hover {
-  background-color: #e9ecef;
 }
 
 /* --- Estilos para las Pestañas de Navegación --- */
@@ -166,15 +165,69 @@ h3 {
   font-weight: 600;
   color: #495057;
   border-bottom: 3px solid transparent;
-  margin-bottom: -2px; /* Alinea el borde inferior con el borde del contenedor */
+  margin-bottom: -2px;
 }
 
 .view-switcher button.active {
-  color: #007bff;
-  border-bottom-color: #007bff;
+  color: var(--dark-blue);
+  border-bottom-color: var(--dark-blue);
 }
 
 .view-switcher button:hover:not(.active) {
   background-color: #f1f3f5;
-  color: #0056b3;
+  color: var(--light-blue);
+}
+
+/* --- Sección de Descuento Especial --- */
+.special-discount-section {
+  background-color: #fcfcfc;
+  border-color: var(--light-blue);
+  transition: all 0.3s ease;
+}
+
+.special-discount-section legend {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.special-discount-section legend input[type="checkbox"] {
+  margin-right: 10px;
+  transform: scale(1.3);
+  cursor: pointer;
+}
+
+.discount-controls {
+  display: grid;
+  grid-template-columns: 100px 150px 1fr;
+  gap: 15px;
+  align-items: center;
+  margin-top: 15px;
+}
+
+/* Botón Dual (% vs S/.) */
+.dual-button {
+  display: flex;
+  border: 2px solid var(--dark-blue);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dual-button button {
+  flex: 1;
+  padding: 8px;
+  font-size: 14px;
+  border-radius: 0;
+  background: white;
+  color: var(--dark-blue);
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+  margin: 0;
+}
+
+.dual-button button.active {
+  background: var(--dark-blue);
+  color: white;
+  font-weight: bold;
 }

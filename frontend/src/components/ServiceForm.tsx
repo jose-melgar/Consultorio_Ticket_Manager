@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import '../styles.css';
 
-// ... Interfaces existentes ...
 interface ServicioAPI {
   "ID_General"?: string;
   "ID_Dental"?: string;
@@ -27,6 +27,12 @@ const ServiceForm: React.FC = () => {
   const [cantidad, setCantidad] = useState<number>(1);
   const [ticketItems, setTicketItems] = useState<TicketItem[]>([]);
   const [metodoPago, setMetodoPago] = useState('Efectivo');
+
+  // Nuevos estados para el Descuento Especial
+  const [hasSpecialDiscount, setHasSpecialDiscount] = useState(false);
+  const [specialDiscountType, setSpecialDiscountType] = useState<'percent' | 'fixed'>('percent');
+  const [specialDiscountValue, setSpecialDiscountValue] = useState<number | ''>('');
+  const [specialDiscountReason, setSpecialDiscountReason] = useState('');
 
   useEffect(() => {
     fetch('http://localhost:5000/api/catalogos')
@@ -56,12 +62,41 @@ const ServiceForm: React.FC = () => {
     setCantidad(1);
   };
 
-  const handleFinalizarVenta = async () => {
+  // Cálculo de totales dinámicos
+  const subtotalServicios = useMemo(() => ticketItems.reduce((acc, item) => acc + item.subtotal, 0), [ticketItems]);
+  
+  const totalCalculado = useMemo(() => {
+    let total = subtotalServicios;
+    if (hasSpecialDiscount && specialDiscountValue) {
+      const val = Number(specialDiscountValue);
+      if (specialDiscountType === 'percent') {
+        total = subtotalServicios - (subtotalServicios * (val / 100));
+      } else {
+        total = subtotalServicios - val;
+      }
+    }
+    return Math.max(0, total); // Evita valores negativos
+  }, [subtotalServicios, hasSpecialDiscount, specialDiscountType, specialDiscountValue]);
+
+  const handleFinalizarVenta = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ticketItems.length || !patientName) return;
+
+    if (hasSpecialDiscount && !specialDiscountReason.trim()) {
+        alert("Por favor, ingrese el motivo del descuento especial.");
+        return;
+    }
+
     const ventaData = {
       paciente: { nombre: patientName, dni: patientDNI },
       items: ticketItems.map(item => ({ id: item.id, nombre: item.nombre, cantidad: item.cantidad })),
       metodo_pago: metodoPago,
-      destino: selectedDestino
+      destino: selectedDestino,
+      // Datos del descuento
+      descuento_especial_activo: hasSpecialDiscount,
+      descuento_especial_tipo: specialDiscountType,
+      descuento_especial_valor: Number(specialDiscountValue) || 0,
+      descuento_especial_razon: specialDiscountReason
     };
 
     try {
@@ -73,11 +108,14 @@ const ServiceForm: React.FC = () => {
 
       if (response.ok) {
           const result = await response.json();
-          alert(`Ticket ${result.ticket_id} guardado correctamente en la carpeta Tickets.`);
+          alert(`Ticket ${result.ticket_id} guardado correctamente y enviado a impresión.`);
           // Limpiar formulario
           setTicketItems([]);
           setPatientName('');
           setPatientDNI('');
+          setHasSpecialDiscount(false);
+          setSpecialDiscountValue('');
+          setSpecialDiscountReason('');
       } else {
           alert("Error al registrar la venta.");
       }
@@ -86,69 +124,126 @@ const ServiceForm: React.FC = () => {
     }
   };
 
-  const totalTicket = useMemo(() => ticketItems.reduce((acc, item) => acc + item.subtotal, 0), [ticketItems]);
-
   return (
     <div className="form-container">
-      <fieldset>
-        <legend>Datos del Paciente</legend>
-        <label>Nombre: <input type="text" value={patientName} onChange={e => setPatientName(e.target.value)} /></label>
-        <label>DNI: <input type="text" value={patientDNI} onChange={e => setPatientDNI(e.target.value)} maxLength={8} /></label>
-      </fieldset>
+      <form onSubmit={handleFinalizarVenta}>
+        <fieldset>
+          <legend>Datos del Paciente</legend>
+          <label>Nombre: <input type="text" value={patientName} onChange={e => setPatientName(e.target.value)} required/></label>
+          <label>DNI: <input type="text" value={patientDNI} onChange={e => setPatientDNI(e.target.value)} maxLength={8} required/></label>
+        </fieldset>
 
-      <fieldset>
-        <legend>Añadir Servicio</legend>
-        <label>Destino:
-          <select value={selectedDestino} onChange={e => { setSelectedDestino(e.target.value as any); setSelectedCategoria(''); setSelectedServicio(''); }}>
-            <option value="general">Las Marianas</option>
-            <option value="dental">Dental</option>
-          </select>
-        </label>
-        <label>Categoría:
-          <select value={selectedCategoria} onChange={e => setSelectedCategoria(e.target.value)}>
-            <option value="">Seleccione...</option>
-            {categoriasDisponibles.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </label>
-        <label>Servicio:
-          <select value={selectedServicio} onChange={e => setSelectedServicio(e.target.value)}>
-            <option value="">Seleccione...</option>
-            {serviciosDisponibles.map(s => <option key={s["ID_General"] || s["ID_Dental"]} value={s["ID_General"] || s["ID_Dental"]}>{s["Nombre Específico"]}</option>)}
-          </select>
-        </label>
-        <label>Cantidad: 
-          <input 
-            type="number" 
-            value={cantidad === 0 ? '' : cantidad} 
-            onChange={e => setCantidad(e.target.value === '' ? 0 : Number(e.target.value))} 
-            onFocus={(e) => e.target.select()} // Soluciona el problema de sobreescritura rápida
-            min="1" 
-          />
-        </label>
-        <button type="button" onClick={handleAddItem} disabled={!selectedServicio}>Añadir</button>
-      </fieldset>
+        <fieldset>
+          <legend>Añadir Servicio</legend>
+          <label>Destino:
+            <select value={selectedDestino} onChange={e => { setSelectedDestino(e.target.value as any); setSelectedCategoria(''); setSelectedServicio(''); }}>
+              <option value="general">Las Marianas</option>
+              <option value="dental">Dental</option>
+            </select>
+          </label>
+          <label>Categoría:
+            <select value={selectedCategoria} onChange={e => setSelectedCategoria(e.target.value)}>
+              <option value="">Seleccione...</option>
+              {categoriasDisponibles.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label>Servicio:
+            <select value={selectedServicio} onChange={e => setSelectedServicio(e.target.value)}>
+              <option value="">Seleccione...</option>
+              {serviciosDisponibles.map(s => <option key={s["ID_General"] || s["ID_Dental"]} value={s["ID_General"] || s["ID_Dental"]}>{s["Nombre Específico"]}</option>)}
+            </select>
+          </label>
+          <label>Cantidad: 
+            <input 
+              type="number" 
+              value={cantidad === 0 ? '' : cantidad} 
+              onChange={e => setCantidad(e.target.value === '' ? 0 : Number(e.target.value))} 
+              onFocus={(e) => e.target.select()}
+              min="1" 
+            />
+          </label>
+          <button type="button" onClick={handleAddItem} disabled={!selectedServicio}>Añadir</button>
+        </fieldset>
 
-      <fieldset>
-        <legend>Resumen</legend>
-        <table>
-          <thead><tr><th>Servicio</th><th>Cant.</th><th>Total</th></tr></thead>
-          <tbody>
-            {ticketItems.map((item, i) => (
-              <tr key={i}><td>{item.nombre}</td><td>{item.cantidad}</td><td>S/. {item.subtotal.toFixed(2)}</td></tr>
-            ))}
-          </tbody>
-        </table>
-        <h3>Total: S/. {totalTicket.toFixed(2)}</h3>
-        <label>Pago:
-          <select value={metodoPago} onChange={e => setMetodoPago(e.target.value)}>
-            <option value="Efectivo">Efectivo</option>
-            <option value="Yape">Yape</option>
-            <option value="Plin">Plin</option>
-            <option value="Tarjeta">Tarjeta</option>
-          </select>
-        </label>
-        <button onClick={handleFinalizarVenta} disabled={!ticketItems.length || !patientName}>Generar Ticket</button>
-      </fieldset>
+        {/* --- NUEVA SECCIÓN DE DESCUENTO ESPECIAL --- */}
+        <fieldset className="special-discount-section">
+          <legend>
+            <input 
+              type="checkbox" 
+              checked={hasSpecialDiscount} 
+              onChange={(e) => setHasSpecialDiscount(e.target.checked)} 
+            /> 
+            Descuento Especial
+          </legend>
+
+          {hasSpecialDiscount && (
+            <div className="discount-controls">
+              <div className="dual-button">
+                <button 
+                  type="button"
+                  className={specialDiscountType === 'percent' ? 'active' : ''} 
+                  onClick={() => setSpecialDiscountType('percent')}
+                >%</button>
+                <button 
+                  type="button"
+                  className={specialDiscountType === 'fixed' ? 'active' : ''} 
+                  onClick={() => setSpecialDiscountType('fixed')}
+                >S/.</button>
+              </div>
+              
+              <input 
+                type="number" 
+                min="0"
+                step="0.01"
+                placeholder={specialDiscountType === 'percent' ? "Porcentaje %" : "Monto Fijo S/."}
+                value={specialDiscountValue}
+                onChange={(e) => setSpecialDiscountValue(e.target.value === '' ? '' : Number(e.target.value))}
+                required={hasSpecialDiscount}
+              />
+              
+              <input 
+                type="text" 
+                placeholder="Razón del descuento (Requerido)" 
+                value={specialDiscountReason}
+                onChange={(e) => setSpecialDiscountReason(e.target.value)}
+                required={hasSpecialDiscount}
+              />
+            </div>
+          )}
+        </fieldset>
+
+        <fieldset>
+          <legend>Resumen</legend>
+          <table>
+            <thead><tr><th>Servicio</th><th>Cant.</th><th>Total</th></tr></thead>
+            <tbody>
+              {ticketItems.map((item, i) => (
+                <tr key={i}><td>{item.nombre}</td><td>{item.cantidad}</td><td>S/. {item.subtotal.toFixed(2)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          
+          {hasSpecialDiscount ? (
+             <div className="summary-totals">
+                <p>Subtotal: S/. {subtotalServicios.toFixed(2)}</p>
+                <p className="discount-text">Descuento: - S/. {(subtotalServicios - totalCalculado).toFixed(2)}</p>
+                <h3>Total a Pagar: S/. {totalCalculado.toFixed(2)}</h3>
+             </div>
+          ) : (
+             <h3>Total: S/. {totalCalculado.toFixed(2)}</h3>
+          )}
+
+          <label>Pago:
+            <select value={metodoPago} onChange={e => setMetodoPago(e.target.value)}>
+              <option value="Efectivo">Efectivo</option>
+              <option value="Yape">Yape</option>
+              <option value="Plin">Plin</option>
+              <option value="Tarjeta">Tarjeta</option>
+            </select>
+          </label>
+          <button type="submit" disabled={!ticketItems.length || !patientName}>Generar Ticket</button>
+        </fieldset>
+      </form>
     </div>
   );
 };

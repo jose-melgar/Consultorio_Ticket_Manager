@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import ServiceForm from './components/ServiceForm';
-import TicketHistory from './components/TicketHistory'; // <-- Importamos el nuevo componente
+import TicketHistory from './components/TicketHistory';
 import './styles.css';
+
+// CORRECCIÓN: Extensión .png para que npm run build lo encuentre
+import logoColor from './assets/Ocupasalud Logo a color.png';
 
 type View = 'form' | 'history';
 
@@ -10,8 +13,15 @@ const App: React.FC = () => {
 
   return (
     <div className="app-container">
+      {/* Encabezado con Logo y Título en dos tonos */}
       <header className="app-header">
-        <h1>Consultorio Las Marianas</h1>
+        <div className="logo-container">
+          <img src={logoColor} alt="Ocupasalud Logo" />
+        </div>
+        <div className="header-title">
+          <span className="title-top">Centro Médico Laboral</span>
+          <span className="title-bottom">LAS MARIANAS</span>
+        </div>
       </header>
 
       {/* --- Pestañas de Navegación --- */}
@@ -31,7 +41,6 @@ const App: React.FC = () => {
       </nav>
 
       <main className="app-main">
-        {/* Renderizado condicional basado en la vista actual */}
         {currentView === 'form' && <ServiceForm />}
         {currentView === 'history' && <TicketHistory />}
       </main>
