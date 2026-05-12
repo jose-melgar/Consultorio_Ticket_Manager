@@ -41,7 +41,6 @@ def serve_static(path):
 
 @app.route("/api/catalogos", methods=["GET"])
 def get_catalogos():
-    # fillna(0) asegura que si hay celdas vacías en Costo o Descuento, envíe un 0 al frontend
     return jsonify({
         "general": CATALOGOS["General"].fillna(0).to_dict(orient="records"),
         "dental": CATALOGOS["Dental"].fillna(0).to_dict(orient="records")
@@ -60,39 +59,67 @@ def registrar():
         cat = CATALOGOS[destino]
         id_col = "ID_General" if data["destino"].lower() == "general" else "ID_Dental"
         
+        # Función para limpiar y convertir a Decimal con seguridad (evita InvalidOperation)
+        def to_decimal(value):
+            if pd.isna(value) or str(value).strip() == "":
+                return Decimal("0.00")
+            # Limpieza de caracteres: manejamos comas, espacios y símbolos
+            clean_value = str(value).strip().replace(',', '.')
+            clean_value = "".join(c for c in clean_value if c.isdigit() or c == '.')
+            try:
+                return Decimal(clean_value)
+            except:
+                return Decimal("0.00")
+
         items_objs = []
         for it in data["items"]:
-            # Buscar el producto en el dataframe de pandas
+            # Obtener la fila del Excel mediante el ID
             row = cat[cat[id_col] == it["id"]].iloc[0]
             
-            # Extraemos el costo unitario (Para ganancias contables)
-            costo = row.get("Costo", 0)
-            if pd.isna(costo): costo = 0
+            # Limpiar valores comunes
+            precio = to_decimal(row.get("Precio Unitario", 0))
+            descuento_p = to_decimal(row.get("Descuento", 0))
+            
+            # Lógica de costos diferenciada por Destino
+            if destino.lower() == 'general':
+                # Extraemos columnas específicas de Las Marianas
+                c_lab = to_decimal(row.get("Costo Laboratorio", 0))
+                c_ins = to_decimal(row.get("Costo Insumos", 0))
+                # El costo_unitario para el modelo es la suma (para evitar el TypeError)
+                costo_para_modelo = c_lab + c_ins
+            else:
+                # Dental usa la columna "Costo" tradicional
+                costo_para_modelo = to_decimal(row.get("Costo", 0))
+                c_lab = Decimal("0.00")
+                c_ins = Decimal("0.00")
 
-            # Extraemos el descuento individual del Excel
-            descuento_item = row.get("Descuento", 0)
-            if pd.isna(descuento_item): descuento_item = 0
-
-            items_objs.append(ServicioItem(
+            # Crear el objeto del ítem (cumpliendo con todos los argumentos requeridos)
+            item = ServicioItem(
                 categoria=row.get("Categoría", ""),
                 nombre_especifico=it["nombre"],
-                precio_unitario=Decimal(str(row["Precio Unitario"])),
-                costo_unitario=Decimal(str(costo)),
+                precio_unitario=precio,
+                costo_unitario=costo_para_modelo,
                 cantidad=int(it["cantidad"]),
-                descuento=Decimal(str(descuento_item)) # Descuento por producto
-            ))
+                descuento=descuento_p
+            )
+
+            # Inyectar propiedades extra para que catalog_manager las use en el Excel
+            if destino.lower() == 'general':
+                item.costo_lab = c_lab
+                item.costo_insumo = c_ins
+            
+            items_objs.append(item)
 
         ticket = Ticket(paciente=paciente, items=items_objs, metodo_pago=data["metodo_pago"], destino=destino)
         id_glob, id_esp = generar_nuevos_ids(destino)
         
-        # --- LÓGICA DE DESCUENTO ESPECIAL ---
-        # Sumamos los subtotales (que ya tienen el descuento individual aplicado)
+        # Cálculo de subtotales y Descuento Especial
         subtotal_servicios = sum(i.subtotal for i in items_objs)
+        desc_valor = to_decimal(data.get("descuento_especial_valor", 0))
         monto_descuento_especial = Decimal("0.00")
         
         desc_activo = data.get("descuento_especial_activo", False)
         desc_tipo = data.get("descuento_especial_tipo", "percent")
-        desc_valor = Decimal(str(data.get("descuento_especial_valor", 0)))
         desc_razon = data.get("descuento_especial_razon", "")
 
         if desc_activo and desc_valor > 0:
@@ -101,12 +128,11 @@ def registrar():
             else:
                 monto_descuento_especial = desc_valor
                 
+        # Calcular total final asegurando que no sea negativo
         total_final_calculado = max(Decimal("0.00"), subtotal_servicios - monto_descuento_especial)
-        
-        # Asignamos el total calculado al ticket mediante el setter
         ticket.total_final = total_final_calculado 
         
-        # Preparamos el diccionario de venta final
+        # Estructura para el historial y documentos
         venta_final = {
             "id_ticket_global": id_glob,
             "id_ticket_especifico": id_esp,
@@ -126,21 +152,18 @@ def registrar():
             "atendido_por": "José Melgar"
         }
 
-        # Guardar en el Excel Maestro de Contabilidad (Saldos y Ganancias)
+        # Procesos de guardado e impresión
         registrar_venta_excel(ticket, id_glob, id_esp, venta_final)
-        
-        # Guardar en el historial de JSON para el Frontend
         guardar_historial_json(venta_final)
         
-        # Generar y guardar el respaldo en PDF digital (Sin mandarlo a Sumatra)
+        # Respaldo PDF
         nombre_limpio = "".join(x for x in paciente.nombre if x.isalnum() or x == " ").replace(" ", "_").upper()
         pdf_name = f"{nombre_limpio}_{id_glob}.pdf"
         pdf_path = os.path.join(TICKETS_DIR, pdf_name)
-        
         with open(pdf_path, "wb") as f:
             f.write(generar_ticket_pdf(venta_final))
         
-        # --- NUEVA IMPRESIÓN FÍSICA VÍA ESC/POS ---
+        # Impresión térmica directa
         imprimir_ticket_escpos(venta_final)
         
         return jsonify({"message": "Venta exitosa", "ticket_id": id_glob, "path": pdf_name}), 200

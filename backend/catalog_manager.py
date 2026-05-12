@@ -50,16 +50,9 @@ def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
     ]
     
     fecha = datetime.now().strftime("%d.%m.%y")
-    
-    # Combinamos ambos IDs para saber el número global y la rama (Ej: TK-0001 | DEN-0001)
     num_nota = f"{id_global} | {id_especifico}"
     
-    # Manejo de iniciales de Pago
-    if ticket.metodo_pago.lower() == 'efectivo': pago = 'E'
-    elif ticket.metodo_pago.lower() == 'yape': pago = 'Y'
-    elif ticket.metodo_pago.lower() == 'plin': pago = 'P'
-    elif ticket.metodo_pago.lower() == 'tarjeta': pago = 'T'
-    else: pago = ticket.metodo_pago[0].upper()
+    pago = ticket.metodo_pago.capitalize()
 
     descripcion_items = ", ".join([f"{item.nombre_especifico} {item.cantidad}" for item in ticket.items])
     ingresos = float(ticket.total_final)
@@ -67,14 +60,23 @@ def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
     egresos_servicios = 0.0
     egresos_insumos = 0.0
     
-    for item in ticket.items:
-        if "insumo" in item.categoria.lower() or "medicamento" in item.categoria.lower():
-            egresos_insumos += float(item.costo_unitario) * item.cantidad
-        else:
-            egresos_servicios += float(item.costo_unitario) * item.cantidad
+    # --- NUEVA LÓGICA DE COSTOS POR DESTINO ---
+    if ticket.destino.lower() == 'dental':
+        # Lógica original para Dental: se basa en palabras clave de la categoría
+        for item in ticket.items:
+            if "insumo" in item.categoria.lower() or "medicamento" in item.categoria.lower():
+                egresos_insumos += float(item.costo_unitario) * item.cantidad
+            else:
+                egresos_servicios += float(item.costo_unitario) * item.cantidad
+    else:
+        # Lógica para Las Marianas (General): usa columnas específicas
+        for item in ticket.items:
+            # costo_lab y costo_insumo deben ser asignados en app.py al leer el Excel
+            egresos_servicios += float(getattr(item, 'costo_lab', 0)) * item.cantidad
+            egresos_insumos += float(getattr(item, 'costo_insumo', 0)) * item.cantidad
 
-    # Cálculo de ganancia
-    ganancia = ingresos - egresos_servicios - egresos_insumos
+    # Cálculo de ganancia: ingresos - suma de ambos costos
+    ganancia = ingresos - (egresos_servicios + egresos_insumos)
     
     # Calcular Saldo
     saldo_anterior = 0.0
@@ -99,8 +101,8 @@ def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
         "Descripción": descripcion_items,
         "A cuenta": 0,
         "ingresos": ingresos,
-        "Egresos - gastos": 0,  # Se deja en 0 como indicaste
-        "LABORATORIO": egresos_servicios, # El costo de consultas/procedimientos va aquí
+        "Egresos - gastos": 0,
+        "LABORATORIO": egresos_servicios,
         "Insumos de lab": egresos_insumos,
         "Ganancia": ganancia,
         "Saldos": nuevo_saldo,
