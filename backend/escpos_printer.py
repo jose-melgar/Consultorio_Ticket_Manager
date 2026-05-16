@@ -49,7 +49,7 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.text("LAS MARIANAS\n")
         
         p.set(align='center', normal_textsize=True, bold=False, double_height=False, double_width=False)
-        direccion = os.getenv('CLINIC_ADDRESS', 'Tu Dirección Aquí')
+        direccion = os.getenv('CLINIC_ADDRESS', 'Calle Pisac 113 Mz B2 Lt 46')
         whatsapp = os.getenv('CLINIC_WHATSAPP', '921 689 864')
         p.text(f"{direccion}\n")
         p.text(f"WhatsApp: {whatsapp}\n")
@@ -66,6 +66,7 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.text("Paciente:\n")
         p.set(bold=False)
         p.text(f"{data['paciente']['nombre']}\n\n")
+        p.text(f"DNI: {data['paciente']['dni']}\n\n")
 
         # --- TABLA DE SERVICIOS ---
         p.set(bold=True)
@@ -98,6 +99,9 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         total = float(data['total_final'])
         p.set(align='right', bold=True, double_height=True, double_width=False)
         p.text(f"TOTAL A PAGAR:  S/. {total:.2f}\n")
+
+        p.set(align='right', normal_textsize=True, bold=False, double_height=False)
+        p.text(f"Método de Pago: {data['metodo_pago']}\n")
         
         p.set(align='right', normal_textsize=True, bold=False, double_height=False)
         p.text("\n*** GRACIAS ***\n")
