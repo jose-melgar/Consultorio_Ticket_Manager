@@ -28,7 +28,6 @@ const ServiceForm: React.FC = () => {
   const [ticketItems, setTicketItems] = useState<TicketItem[]>([]);
   const [metodoPago, setMetodoPago] = useState('Efectivo');
   
-  // Nuevo Estado para Observaciones
   const [observaciones, setObservaciones] = useState('');
 
   const [hasSpecialDiscount, setHasSpecialDiscount] = useState(false);
@@ -64,6 +63,28 @@ const ServiceForm: React.FC = () => {
     setCantidad(1);
   };
 
+  // --- NUEVA FUNCIÓN: RETROCEDER / QUITAR ÍTEM ESPECÍFICO ---
+  const handleRemoveItem = (idToRemove: string) => {
+    setTicketItems(prev => prev.filter(item => item.id !== idToRemove));
+  };
+
+  // --- NUEVA FUNCIÓN: ANULAR OPERACIÓN COMPLETA ---
+  const handleAnularVenta = () => {
+    if (window.confirm("¿Está seguro de que desea anular esta operación? Se borrarán todos los datos ingresados actualmente.")) {
+      setTicketItems([]);
+      setPatientName('');
+      setPatientDNI('');
+      setHasSpecialDiscount(false);
+      setSpecialDiscountValue('');
+      setSpecialDiscountReason('');
+      setObservaciones('');
+      setSelectedCategoria('');
+      setSelectedServicio('');
+      setCantidad(1);
+      setMetodoPago('Efectivo');
+    }
+  };
+
   const subtotalServicios = useMemo(() => ticketItems.reduce((acc, item) => acc + item.subtotal, 0), [ticketItems]);
   
   const totalCalculado = useMemo(() => {
@@ -97,7 +118,7 @@ const ServiceForm: React.FC = () => {
       descuento_especial_tipo: specialDiscountType,
       descuento_especial_valor: Number(specialDiscountValue) || 0,
       descuento_especial_razon: specialDiscountReason,
-      observaciones: observaciones // Se envía al backend
+      observaciones: observaciones
     };
 
     try {
@@ -212,7 +233,6 @@ const ServiceForm: React.FC = () => {
           )}
         </fieldset>
 
-        {/* --- NUEVA SECCIÓN DE OBSERVACIONES --- */}
         <fieldset>
           <legend>Observaciones Adicionales</legend>
           <textarea 
@@ -227,10 +247,31 @@ const ServiceForm: React.FC = () => {
         <fieldset>
           <legend>Resumen</legend>
           <table>
-            <thead><tr><th>Servicio</th><th>Cant.</th><th>Total</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Servicio</th>
+                <th>Cant.</th>
+                <th>Total</th>
+                <th>Acción</th> {/* Columna extra para remover un ítem */}
+              </tr>
+            </thead>
             <tbody>
               {ticketItems.map((item, i) => (
-                <tr key={i}><td>{item.nombre}</td><td>{item.cantidad}</td><td>S/. {item.subtotal.toFixed(2)}</td></tr>
+                <tr key={i}>
+                  <td>{item.nombre}</td>
+                  <td>{item.cantidad}</td>
+                  <td>S/. {item.subtotal.toFixed(2)}</td>
+                  <td>
+                    <button 
+                      type="button" 
+                      onClick={() => handleRemoveItem(item.id)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px' }}
+                      title="Quitar este servicio"
+                    >
+                      ❌
+                    </button>
+                  </td>
+                </tr>
               ))}
             </tbody>
           </table>
@@ -253,7 +294,21 @@ const ServiceForm: React.FC = () => {
               <option value="Tarjeta">Tarjeta</option>
             </select>
           </label>
-          <button type="submit" disabled={!ticketItems.length || !patientName}>Generar Ticket</button>
+          
+          {/* Fila de Botones finales con la adición de Anular */}
+          <div style={{ display: 'flex', gap: '15px', marginTop: '15px' }}>
+            <button 
+              type="button" 
+              onClick={handleAnularVenta}
+              style={{ backgroundColor: '#dc3545', color: 'white', cursor: 'pointer' }}
+              disabled={!ticketItems.length && !patientName && !patientDNI}
+            >
+              Anular Operación
+            </button>
+            <button type="submit" disabled={!ticketItems.length || !patientName}>
+              Generar Ticket
+            </button>
+          </div>
         </fieldset>
       </form>
     </div>
