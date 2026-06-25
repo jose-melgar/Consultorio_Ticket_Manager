@@ -12,13 +12,12 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         AREA_IMPRESION_PX = 512
         
         ANCHO_HOJA_REAL_PX = 704  
-        ANCHO_LOGO_TARGET = ANCHO_HOJA_REAL_PX // 2
+        ANCHO_LOGO_TARGET = ANCHO_HOJA_REAL_PX // 3
         
         # --- PROCESAMIENTO DEL LOGO ---
         base_path = os.path.dirname(os.path.abspath(__file__))
         logo_path = os.path.join(base_path, '..', 'assets', 'Ocupasalud Logo blanco y negro.png')
         
-        canvas = None
         if os.path.exists(logo_path):
             img = Image.open(logo_path)
             w_percent = (ANCHO_LOGO_TARGET / float(img.size[0]))
@@ -29,14 +28,11 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
             
             offset_x = (AREA_IMPRESION_PX - ANCHO_LOGO_TARGET) // 2
             canvas.paste(img_resized, (offset_x, 0))
-
-        # =================================================================
-        # --- PRIMERA IMPRESIÓN: TICKET PACIENTE/CLIENTE ---
-        # =================================================================
-        if canvas:
+            
             p.image(canvas, impl='bitImageColumn')
             p.text("\n")
 
+        # --- ENCABEZADO ---
         p.set(align='center', bold=True, double_height=True, double_width=True)
         p.text("CENTRO MEDICO LABORAL\n")
         p.text("LAS MARIANAS\n")
@@ -48,6 +44,7 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.text(f"WhatsApp: {whatsapp}\n")
         p.text("-" * ANCHO_CARACTERES + "\n") 
         
+        # --- DATOS DEL PACIENTE Y TICKET ---
         p.set(align='left', bold=True)
         p.text(f"TICKET: {data['id_ticket_global']}\n")
         p.set(bold=False)
@@ -57,9 +54,11 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.set(bold=True)
         p.text("Paciente:\n")
         p.set(bold=False)
-        p.text(f"{data['paciente']['nombre']}\n\n")
+        # Se corrigieron los saltos \n\n excesivos y se agregó la etiqueta DNI
+        p.text(f"{data['paciente']['nombre']}\n")
         p.text(f"DNI: {data['paciente']['dni']}\n\n")
 
+        # --- TABLA DE SERVICIOS ---
         p.set(bold=True)
         p.text(f"{'DESCRIPCION'.ljust(26)}{'CANT'.center(8)}{'TOTAL'.rjust(14)}\n")
         p.set(bold=False)
@@ -72,6 +71,7 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
 
         p.text("-" * ANCHO_CARACTERES + "\n")
         
+        # --- SECCIÓN FINANCIERA ---
         p.set(align='right')
         if data.get('descuento_especial_activo'):
             subtotal = float(data.get('subtotal_servicios', 0))
@@ -89,76 +89,16 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.set(align='right', bold=True, double_height=True, double_width=False)
         p.text(f"TOTAL A PAGAR:  S/. {total:.2f}\n")
 
+        # Se estructuró mejor el método de pago con su respectivo identificador
         p.set(align='right', normal_textsize=True, bold=False, double_height=False)
         p.text(f"Método de Pago: {data['metodo_pago']}\n")
         
         p.set(align='right', normal_textsize=True, bold=False, double_height=False)
         p.text("\n*** GRACIAS ***\n")
         
-        # Primer avance y corte del ticket del cliente
+        # Avance de papel y Corte
         p.text("\n\n\n\n\n")
         p.cut()
-
-        # =================================================================
-        # --- SEGUNDA IMPRESIÓN AUTOMÁTICA: COPIA DE CONTROL INTERNO ---
-        # =================================================================
-        if canvas:
-            p.image(canvas, impl='bitImageColumn')
-            p.text("\n")
-
-        p.set(align='center', bold=True, double_height=True, double_width=True)
-        p.text("CENTRO MEDICO LABORAL\n")
-        p.text("LAS MARIANAS\n")
-        
-        p.set(align='center', normal_textsize=True, bold=False, double_height=False, double_width=False)
-        p.text(f"WhatsApp: {whatsapp}\n")
-        p.text("-" * ANCHO_CARACTERES + "\n") 
-        
-        p.set(align='center', bold=True)
-        p.text("[COPIA CONTROL INTERNO]\n\n") # Identificador claro de copia
-        
-        p.set(align='left', bold=True)
-        p.text(f"TICKET: {data['id_ticket_global']}\n")
-        p.set(bold=False)
-        p.text(f"Op: {data['id_ticket_especifico']}\n")
-        p.text(f"Fecha: {data['fecha']}\n\n")
-        
-        p.set(bold=True)
-        p.text("Paciente:\n")
-        p.set(bold=False)
-        p.text(f"{data['paciente']['nombre']}\n\n")
-        p.text(f"DNI: {data['paciente']['dni']}\n\n")
-
-        p.set(bold=True)
-        p.text(f"{'DESCRIPCION'.ljust(26)}{'CANT'.center(8)}{'TOTAL'.rjust(14)}\n")
-        p.set(bold=False)
-        
-        for item in data['items']:
-            nombre = item['nombre'][:24].ljust(26)
-            cant = str(item['cantidad']).center(8)
-            subt = f"{float(item['subtotal']):.2f}".rjust(14)
-            p.text(f"{nombre}{cant}{subt}\n")
-
-        p.text("-" * ANCHO_CARACTERES + "\n")
-        
-        p.set(align='right')
-        if data.get('descuento_especial_activo'):
-            subtotal = float(data.get('subtotal_servicios', 0))
-            p.text(f"{'Subtotal: '.rjust(34)}S/. {subtotal:.2f}\n")
-            monto_desc = float(data['descuento_especial_monto_soles'])
-            p.text(f"Dcto: - S/. {monto_desc:.2f}\n")
-
-        p.set(align='right', bold=True, double_height=True, double_width=False)
-        p.text(f"TOTAL:  S/. {total:.2f}\n")
-
-        p.set(align='right', normal_textsize=True, bold=False, double_height=False)
-        p.text(f"Método de Pago: {data['metodo_pago']}\n")
-        
-        # Segundo avance y corte final de la copia
-        p.text("\n\n\n\n\n")
-        p.cut()
-        
-        # Se cierra la cola de impresión de Windows para liberar el trabajo de golpe
         p.close()
         
         return True

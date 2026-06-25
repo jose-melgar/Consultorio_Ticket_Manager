@@ -1,112 +1,143 @@
 import React, { useEffect, useState } from 'react';
+import '../styles.css';
 
-interface Venta {
-    id_ticket_global: string;
-    id_ticket_especifico: string;
-    fecha: string;
-    paciente: {
-        nombre: string;
-        dni: string;
-    };
-    total_final: number | string;
-    metodo_pago: string;
-    destino: string;
+interface TicketHistorial {
+  id_ticket_global: string;
+  id_ticket_especifico: string;
+  fecha: string;
+  paciente: {
+    nombre: string;
+    dni: string;
+  };
+  total_final: string;
 }
 
 const TicketHistory: React.FC = () => {
-    const [historial, setHistorial] = useState<Venta[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+  const [tickets, setTickets] = useState<TicketHistorial[]>([]);
 
-    const cargarDatos = async () => {
-        try {
-            setLoading(true);
-            const response = await fetch('http://localhost:5000/api/tickets');
-            
-            if (!response.ok) {
-                throw new Error('No se pudo obtener el historial del servidor');
-            }
+  const fetchTickets = () => {
+    fetch('http://localhost:5000/api/tickets')
+      .then(res => res.json())
+      .then(data => setTickets(data))
+      .catch(err => console.error("Error al cargar historial", err));
+  };
 
-            const data = await response.json();
-            // Validamos que la data sea un arreglo
-            setHistorial(Array.isArray(data) ? data : []);
-            setError(null);
-        } catch (err) {
-            console.error("Error al cargar historial:", err);
-            setError("Error de conexión con el backend.");
-        } finally {
-            setLoading(false);
+  useEffect(() => {
+    fetchTickets();
+  }, []);
+
+  // --- NUEVA FUNCIÓN PARA ENVIAR LA REIMPRESIÓN AL BACKEND ---
+  const handleReimprimir = async (id_global: string, cantidad: number) => {
+    try {
+      const response = await fetch('http://localhost:5000/api/reimprimir-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_ticket_global: id_global, cantidad: cantidad })
+      });
+      
+      if (response.ok) {
+        alert(`Enviando ${cantidad} copia(s) del ticket ${id_global} a la ticketera térmica.`);
+      } else {
+        alert("Hubo un error al intentar mandar la reimpresión.");
+      }
+    } catch (error) {
+      alert("Error de conexión con el servidor de la ticketera.");
+    }
+  };
+
+  const handleEliminarTicket = async (id_global: string) => {
+    if (window.confirm(`⚠️ ADVERTENCIA ⚠️\n\n¿Estás absolutamente seguro de eliminar el ticket ${id_global}?\n\nEsto lo borrará del sistema, eliminará el PDF y reajustará el archivo de contabilidad en Excel. Esta acción no se puede deshacer.`)) {
+      try {
+        const response = await fetch(`http://localhost:5000/api/eliminar-ticket/${id_global}`, {
+          method: 'DELETE',
+        });
+        
+        if (response.ok) {
+          alert(`Ticket ${id_global} eliminado correctamente de la contabilidad.`);
+          fetchTickets();
+        } else {
+          alert("Hubo un problema al intentar eliminar el ticket.");
         }
-    };
+      } catch (error) {
+        alert("Error de conexión al intentar eliminar.");
+      }
+    }
+  };
 
-    useEffect(() => {
-        cargarDatos();
-    }, []);
-
-    if (loading) return <div className="p-4 text-blue-600 font-bold">Cargando historial desde ventas.json...</div>;
-    
-    if (error) return (
-        <div className="p-4 bg-red-100 text-red-700 rounded-lg mt-6">
-            {error} <button onClick={cargarDatos} className="underline ml-2">Reintentar</button>
-        </div>
-    );
-
-    return (
-        <div className="bg-white p-6 rounded-lg shadow-md mt-6">
-            <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold">Historial de Tickets</h2>
-                <button onClick={cargarDatos} className="text-sm bg-gray-200 px-3 py-1 rounded hover:bg-gray-300">
-                    Actualizar
-                </button>
-            </div>
-            
-            <div className="overflow-x-auto">
-                <table className="min-w-full table-auto">
-                    <thead>
-                        <tr className="bg-gray-100 border-b">
-                            <th className="px-4 py-2 text-left">Ticket</th>
-                            <th className="px-4 py-2 text-left">Fecha</th>
-                            <th className="px-4 py-2 text-left">Paciente</th>
-                            <th className="px-4 py-2 text-left">Destino</th>
-                            <th className="px-4 py-2 text-right">Total</th>
-                            <th className="px-4 py-2 text-center">Pago</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {historial.map((venta, index) => (
-                            <tr key={index} className="border-b hover:bg-gray-50 transition-colors">
-                                <td className="px-4 py-2 font-mono text-xs">
-                                    <span className="font-bold">{venta.id_ticket_global}</span>
-                                    <br />
-                                    <span className="text-gray-400">{venta.id_ticket_especifico}</span>
-                                </td>
-                                <td className="px-4 py-2 text-sm">{venta.fecha}</td>
-                                <td className="px-4 py-2 text-sm">
-                                    <div className="font-medium">{venta.paciente.nombre}</div>
-                                    <div className="text-xs text-gray-500">DNI: {venta.paciente.dni}</div>
-                                </td>
-                                <td className="px-4 py-2 text-sm">{venta.destino}</td>
-                                <td className="px-4 py-2 text-right font-bold text-green-700">
-                                    S/. {Number(venta.total_final).toFixed(2)}
-                                </td>
-                                <td className="px-4 py-2 text-center">
-                                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-[10px] uppercase font-bold">
-                                        {venta.metodo_pago}
-                                    </span>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-
-                {historial.length === 0 && (
-                    <div className="text-center py-10">
-                        <p className="text-gray-500 italic">No se encontraron registros en el archivo de ventas.</p>
+  return (
+    <div className="history-container">
+      <h2>Historial de Tickets Generados</h2>
+      <button className="refresh-button" onClick={fetchTickets}>🔄 Actualizar Lista</button>
+      
+      <table className="history-table">
+        <thead>
+          <tr>
+            <th>Ticket Global</th>
+            <th>Operación</th>
+            <th>Fecha</th>
+            <th>Paciente</th>
+            <th>Total (S/.)</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tickets.length === 0 ? (
+            <tr><td colSpan={6} style={{ textAlign: 'center' }}>No hay tickets registrados aún.</td></tr>
+          ) : (
+            [...tickets].reverse().map((ticket, index) => (
+              <tr key={index}>
+                <td>{ticket.id_ticket_global}</td>
+                <td>{ticket.id_ticket_especifico}</td>
+                <td>{ticket.fecha}</td>
+                <td>{ticket.paciente?.nombre || 'Desconocido'}</td>
+                <td>S/. {parseFloat(ticket.total_final).toFixed(2)}</td>
+                <td style={{ textAlign: 'center' }}>
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center' }}>
+                    
+                    {/* Control de cantidad de copias integrado en la fila */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <label htmlFor={`copias-${ticket.id_ticket_global}`} style={{ fontSize: '11px', margin: 0 }}>Cops:</label>
+                      <input 
+                        type="number" 
+                        min="1" 
+                        max="5" 
+                        defaultValue="1" 
+                        id={`copias-${ticket.id_ticket_global}`}
+                        style={{ width: '40px', padding: '2px', textAlign: 'center', fontSize: '12px' }}
+                      />
                     </div>
-                )}
-            </div>
-        </div>
-    );
+
+                    {/* Botón de Reimpresión */}
+                    <button 
+                      onClick={() => {
+                        const input = document.getElementById(`copias-${ticket.id_ticket_global}`) as HTMLInputElement;
+                        const cant = input ? parseInt(input.value) : 1;
+                        handleReimprimir(ticket.id_ticket_global, cant);
+                      }}
+                      style={{ backgroundColor: '#007bff', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      title="Reimprimir este ticket automáticamente"
+                    >
+                      🖨️ Imprimir
+                    </button>
+
+                    {/* Botón de Borrado */}
+                    <button 
+                      onClick={() => handleEliminarTicket(ticket.id_ticket_global)} 
+                      style={{ backgroundColor: '#dc3545', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                      title="Eliminar del sistema"
+                    >
+                      🗑️ Borrar
+                    </button>
+
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
 };
 
 export default TicketHistory;

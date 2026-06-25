@@ -24,3 +24,4 @@ __pycache__/
 .vscode/
 .idea/
 *.env
+backend/prueba_rapida.py
