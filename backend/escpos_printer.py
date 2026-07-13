@@ -1,4 +1,5 @@
 import os
+import textwrap  # Importado para manejar el salto de línea limpio por palabras
 from escpos.printer import Win32Raw
 from PIL import Image
 
@@ -54,7 +55,6 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.set(bold=True)
         p.text("Paciente:\n")
         p.set(bold=False)
-        # Se corrigieron los saltos \n\n excesivos y se agregó la etiqueta DNI
         p.text(f"{data['paciente']['nombre']}\n")
         p.text(f"DNI: {data['paciente']['dni']}\n\n")
 
@@ -93,7 +93,23 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.set(align='right', normal_textsize=True, bold=False, double_height=False)
         p.text(f"Método de Pago: {data['metodo_pago']}\n")
         
-        p.set(align='right', normal_textsize=True, bold=False, double_height=False)
+        # ==============================================================================
+        # 📝 NUEVA SECCIÓN: OBSERVACIONES ADICIONALES EN EL TICKET FÍSICO
+        # ==============================================================================
+        observaciones = data.get('observaciones', '').strip()
+        if observaciones:
+            p.text("-" * ANCHO_CARACTERES + "\n")
+            p.set(align='left', bold=True)
+            p.text("Observaciones:\n")
+            p.set(bold=False)
+            
+            # textwrap.wrap rompe el texto en un array de líneas sin cortar palabras
+            lineas_obs = textwrap.wrap(observaciones, width=ANCHO_CARACTERES)
+            for linea in lineas_obs:
+                p.text(f"{linea}\n")
+        
+        # Retornamos la alineación para el mensaje de cierre
+        p.set(align='center', normal_textsize=True, bold=False, double_height=False)
         p.text("\n*** GRACIAS ***\n")
         
         # Avance de papel y Corte
