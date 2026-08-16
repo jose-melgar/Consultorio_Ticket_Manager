@@ -11,7 +11,16 @@ CATALOGO_GENERAL = os.path.join(DATA_DIR, "Lista de Precios-Las Marianas.xlsx")
 CATALOGO_DENTAL = os.path.join(DATA_DIR, "Lista de Precios-Dental.xlsx")
 HISTORIAL_JSON = os.path.join(DATA_DIR, "ventas.json")
 ID_COUNTER_FILE = os.path.join(DATA_DIR, "id_counters.json")
-LIBRO_CONTABLE = os.path.join(DATA_DIR, "Contabilidad_Marianas.xlsx")
+
+# --- RUTAS SEPARADAS DE CONTABILIDAD ---
+LIBRO_MARIANAS = os.path.join(DATA_DIR, "Contabilidad_Las_Marianas.xlsx")
+LIBRO_DENTAL = os.path.join(DATA_DIR, "Contabilidad_Dental.xlsx")
+
+def obtener_libro_contable(destino: str) -> str:
+    """Retorna la ruta del archivo Excel correspondiente según el destino de la venta."""
+    if str(destino).lower() == 'dental':
+        return LIBRO_DENTAL
+    return LIBRO_MARIANAS
 
 def cargar_catalogos():
     return {
@@ -23,7 +32,7 @@ def generar_nuevos_ids(destino: str):
     if not os.path.exists(ID_COUNTER_FILE):
         counters = {"global": 0, "general": 0, "dental": 0}
     else:
-        with open(ID_COUNTER_FILE, 'r') as f:
+        with open(ID_COUNTER_FILE, 'r', encoding='utf-8') as f:
             counters = json.load(f)
 
     counters["global"] += 1
@@ -35,13 +44,14 @@ def generar_nuevos_ids(destino: str):
         id_esp = f'DEN-{counters["dental"]:04d}'
     
     id_glob = f'TK-{counters["global"]:04d}'
-    with open(ID_COUNTER_FILE, 'w') as f:
-        json.dump(counters, f)
+    with open(ID_COUNTER_FILE, 'w', encoding='utf-8') as f:
+        json.dump(counters, f, indent=4)
     return id_glob, id_esp
 
 def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
     """
-    Registra la venta e inyecta la fórmula de Excel para arrastrar saldos automáticos.
+    Registra la venta en el libro contable respectivo (General o Dental)
+    e inyecta la fórmula de Excel para arrastrar saldos automáticos.
     """
     columnas = [
         "Fecha", "nota de venta", "Pago", "Nombre", "Descripción", "A cuenta", 
@@ -49,13 +59,15 @@ def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
         "Ganancia", "Saldos", "observaciones"
     ]
     
+    libro_destino = obtener_libro_contable(ticket.destino)
     fecha = datetime.now().strftime("%d.%m.%y")
     num_nota = f"{id_global} | {id_especifico}"
     pago = ticket.metodo_pago.capitalize()
     nombre_paciente = ticket.paciente.nombre.upper()
 
+    # Guarda la descripción completa sin truncar
     descripcion_items = ", ".join([
-        f"{item.nombre_especifico} {item.cantidad}" if item.cantidad >= 2 else item.nombre_especifico 
+        f"{item.nombre_especifico} x{item.cantidad}" if item.cantidad >= 2 else item.nombre_especifico 
         for item in ticket.items
     ])
     
@@ -78,7 +90,7 @@ def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
 
     obs = venta_final.get('observaciones', '')
     if venta_final.get('descuento_especial_activo'):
-        obs += f" | Desc: {venta_final['descuento_especial_razon']}"
+        obs += f" | Desc: {venta_final.get('descuento_especial_razon', '')}"
 
     nueva_fila = {
         "Fecha": fecha,
@@ -96,24 +108,23 @@ def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
         "observaciones": obs
     }
 
-    if not os.path.exists(LIBRO_CONTABLE):
+    if not os.path.exists(libro_destino):
         df = pd.DataFrame([nueva_fila], columns=columnas)
         df.loc[0, "Saldos"] = "=K2"
-        df.to_excel(LIBRO_CONTABLE, index=False)
+        df.to_excel(libro_destino, index=False)
     else:
-        wb = load_workbook(LIBRO_CONTABLE)
+        wb = load_workbook(libro_destino)
         ws = wb.active
         start_row = ws.max_row + 1
         wb.close()
         
         formula_saldo = f"=L{start_row-1}+K{start_row}"
 
-        with pd.ExcelWriter(LIBRO_CONTABLE, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
+        with pd.ExcelWriter(libro_destino, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
             df_nuevo = pd.DataFrame([nueva_fila], columns=columnas)
             df_nuevo.loc[0, "Saldos"] = formula_saldo
             df_nuevo.to_excel(writer, index=False, header=False, startrow=start_row-1)
 
-# --- FUNCIÓN REINCORPORADA: GUARDA CADA COMPRA EN EL HISTORIAL DIGITAL ---
 def guardar_historial_json(venta_data):
     def default_serializer(obj):
         if isinstance(obj, Decimal): return str(obj)
@@ -128,7 +139,6 @@ def guardar_historial_json(venta_data):
     with open(HISTORIAL_JSON, 'w', encoding='utf-8') as f:
         json.dump(historial, f, indent=4, default=default_serializer, ensure_ascii=False)
 
-# --- FUNCIONES DE ANULACIÓN Y ELIMINACIÓN ---
 def eliminar_ticket_json(id_global: str) -> bool:
     if not os.path.exists(HISTORIAL_JSON): return False
     with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
@@ -142,32 +152,41 @@ def eliminar_ticket_json(id_global: str) -> bool:
     return False
 
 def eliminar_ticket_excel(id_global: str) -> bool:
-    if not os.path.exists(LIBRO_CONTABLE): return False
-    wb = load_workbook(LIBRO_CONTABLE)
-    ws = wb.active
-    
-    fila_a_eliminar = None
-    for r in range(2, ws.max_row + 1):
-        if id_global in str(ws.cell(row=r, column=2).value or ""):
-            fila_a_eliminar = r
-            break
-            
-    if fila_a_eliminar:
-        ws.delete_rows(fila_a_eliminar)
+    """Busca y elimina el ticket en ambos libros contables si existe."""
+    libros = [LIBRO_MARIANAS, LIBRO_DENTAL]
+    eliminado = False
+
+    for libro in libros:
+        if not os.path.exists(libro):
+            continue
         
-        # Reestructuramos fórmulas para arrastrar saldos automáticos
-        for r in range(fila_a_eliminar, ws.max_row + 1):
-            if r == 2:
-                ws.cell(row=r, column=12, value="=K2")
-            else:
-                ws.cell(row=r, column=12, value=f"=L{r-1}+K{r}")
+        wb = load_workbook(libro)
+        ws = wb.active
+        
+        fila_a_eliminar = None
+        for r in range(2, ws.max_row + 1):
+            if id_global in str(ws.cell(row=r, column=2).value or ""):
+                fila_a_eliminar = r
+                break
                 
-        wb.save(LIBRO_CONTABLE)
-        wb.close()
-        return True
-        
-    wb.close()
-    return False
+        if fila_a_eliminar:
+            ws.delete_rows(fila_a_eliminar)
+            
+            # Reestructurar fórmulas de saldos automáticos
+            for r in range(fila_a_eliminar, ws.max_row + 1):
+                if r == 2:
+                    ws.cell(row=r, column=12, value="=K2")
+                else:
+                    ws.cell(row=r, column=12, value=f"=L{r-1}+K{r}")
+                    
+            wb.save(libro)
+            wb.close()
+            eliminado = True
+            break
+        else:
+            wb.close()
+
+    return eliminado
 
 def leer_historial_ventas():
     if not os.path.exists(HISTORIAL_JSON): return []

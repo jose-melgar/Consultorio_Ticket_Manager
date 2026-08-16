@@ -10,6 +10,12 @@ type View = 'form' | 'history';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('form');
+  const [prefilledPatient, setPrefilledPatient] = useState<{ nombre: string; dni: string } | null>(null);
+
+  const handleCargarPaciente = (nombre: string, dni: string) => {
+    setPrefilledPatient({ nombre, dni });
+    setCurrentView('form');
+  };
 
   return (
     <div className="app-container">
@@ -41,8 +47,8 @@ const App: React.FC = () => {
       </nav>
 
       <main className="app-main">
-        {currentView === 'form' && <ServiceForm />}
-        {currentView === 'history' && <TicketHistory />}
+        {currentView === 'form' && <ServiceForm prefilledPatient={prefilledPatient} />}
+        {currentView === 'history' && <TicketHistory onCargarPaciente={handleCargarPaciente} />}
       </main>
       
       <footer className="app-footer">

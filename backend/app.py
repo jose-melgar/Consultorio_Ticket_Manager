@@ -137,7 +137,7 @@ def registrar():
         total_final_calculado = max(Decimal("0.00"), subtotal_servicios - monto_descuento_especial)
         ticket.total_final = total_final_calculado 
         
-        # --- INYECCIÓN DE DATOS DE MÚLTIPLES MÉTODOS DE PAGO (BOCETO JOSÉ) ---
+        # --- INYECCIÓN DE DATOS DE MÚLTIPLES MÉTODOS DE PAGO ---
         venta_final = {
             "id_ticket_global": id_glob,
             "id_ticket_especifico": id_esp,
@@ -152,14 +152,15 @@ def registrar():
             "descuento_especial_razon": desc_razon,
             "observaciones": data.get("observaciones", ""),
             "total_final": str(total_final_calculado),
-            "metodo_pago": ticket.metodo_pago, # "Yape(100), Efectivo(-50)" ingresa directo a la columna única
-            "pago_con": str(data.get("pago_con", 0)), # Guardado para auditoría en el JSON
-            "vuelto": str(data.get("vuelto", 0)), # Guardado para auditoría en el JSON
-            "desglose_pagos": data.get("desglose_pagos", []), # Viaja directo a escpos_printer
+            "metodo_pago": ticket.metodo_pago,
+            "pago_con": str(data.get("pago_con", 0)),
+            "vuelto": str(data.get("vuelto", 0)),
+            "desglose_pagos": data.get("desglose_pagos", []),
             "destino": ticket.destino,
             "atendido_por": "José Melgar"
         }
 
+        # Guarda en el Excel correspondiente (General -> Las Marianas | Dental -> Dental)
         registrar_venta_excel(ticket, id_glob, id_esp, venta_final)
         guardar_historial_json(venta_final)
         
@@ -169,10 +170,10 @@ def registrar():
         with open(pdf_path, "wb") as f:
             f.write(generar_ticket_pdf(venta_final))
         
-        # --- ENTRADA AUTOMÁTICA A LA TICKETERA CON NUEVO DETALLE DE COBROS ---
-        #imprimir_ticket_escpos(venta_final)
-        #time.sleep(2.5)
-        #imprimir_ticket_escpos(venta_final)
+        # Impresión térmica en físico
+        imprimir_ticket_escpos(venta_final)
+        time.sleep(2.5)
+        imprimir_ticket_escpos(venta_final)
         
         return jsonify({"message": "Venta exitosa", "ticket_id": id_glob, "path": pdf_name}), 200
 
@@ -216,7 +217,6 @@ def reimprimir_ticket():
     cantidad_copias = int(data.get("cantidad", 1))
 
     try:
-        from catalog_manager import leer_historial_ventas
         tickets = leer_historial_ventas()
         
         ticket_encontrado = None

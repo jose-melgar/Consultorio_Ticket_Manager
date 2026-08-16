@@ -23,7 +23,11 @@ interface PagoMetodo {
   monto: number;
 }
 
-const ServiceForm: React.FC = () => {
+interface ServiceFormProps {
+  prefilledPatient?: { nombre: string; dni: string } | null;
+}
+
+const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
   const [patientName, setPatientName] = useState('');
   const [patientDNI, setPatientDNI] = useState('');
   const [catalogos, setCatalogos] = useState<{ general: ServicioAPI[], dental: ServicioAPI[] }>({ general: [], dental: [] });
@@ -46,6 +50,14 @@ const ServiceForm: React.FC = () => {
   // --- ESTADOS PARA MÚLTIPLES MÉTODOS DE PAGO (BOCETO DE JOSÉ) ---
   const [metodoSeleccionado, setMetodoSeleccionado] = useState('');
   const [listaPagos, setListaPagos] = useState<PagoMetodo[]>([]);
+
+  // Cargar datos prellenados únicamente si vienen desde el botón "Cargar" del Historial
+  useEffect(() => {
+    if (prefilledPatient) {
+      setPatientName(prefilledPatient.nombre);
+      setPatientDNI(prefilledPatient.dni);
+    }
+  }, [prefilledPatient]);
 
   useEffect(() => {
     fetch('http://localhost:5000/api/catalogos')
@@ -343,6 +355,7 @@ const ServiceForm: React.FC = () => {
                 <option value="Yape">Yape</option>
                 <option value="Plin">Plin</option>
                 <option value="Tarjeta">Tarjeta</option>
+                <option value="Transferencia">Transferencia</option>
               </select>
               <button 
                 type="button" 

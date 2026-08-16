@@ -1,5 +1,5 @@
 import os
-import textwrap  # Importado para manejar el salto de línea limpio por palabras
+import textwrap
 from escpos.printer import Win32Raw
 from PIL import Image
 
@@ -58,16 +58,37 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.text(f"{data['paciente']['nombre']}\n")
         p.text(f"DNI: {data['paciente']['dni']}\n\n")
 
-        # --- TABLA DE SERVICIOS ---
+        # --- DETALLE DE SERVICIOS (ANCHO COMPLETO SIN CORTES) ---
+        p.text("-" * ANCHO_CARACTERES + "\n")
         p.set(bold=True)
-        p.text(f"{'DESCRIPCION'.ljust(26)}{'CANT'.center(8)}{'TOTAL'.rjust(14)}\n")
+        p.text("DETALLE DE SERVICIOS\n")
+        p.text("-" * ANCHO_CARACTERES + "\n")
         p.set(bold=False)
         
-        for item in data['items']:
-            nombre = item['nombre'][:24].ljust(26)
-            cant = str(item['cantidad']).center(8)
-            subt = f"{float(item['subtotal']):.2f}".rjust(14)
-            p.text(f"{nombre}{cant}{subt}\n")
+        for item in data.get('items', []):
+            nombre_completo = item.get('nombre', '')
+            cant = int(item.get('cantidad', 1))
+            
+            # Calcular subtotal
+            if 'subtotal' in item:
+                subt = float(item['subtotal'])
+            else:
+                subt = float(item.get('precio_unitario', 0)) * cant
+            
+            # 1. Imprime el nombre completo ocupando todo el ancho (48 caracteres)
+            lineas_nombre = textwrap.wrap(nombre_completo, width=ANCHO_CARACTERES)
+            p.set(align='left', bold=True)
+            for linea in lineas_nombre:
+                p.text(f"{linea}\n")
+            
+            # 2. Imprime la cantidad y el subtotal en la línea inferior
+            p.set(bold=False)
+            txt_cant = f"  Cant: {cant}"
+            txt_subt = f"Total: S/. {subt:.2f}"
+            espacios = ANCHO_CARACTERES - len(txt_cant) - len(txt_subt)
+            if espacios < 1:
+                espacios = 1
+            p.text(f"{txt_cant}{' ' * espacios}{txt_subt}\n\n")
 
         p.text("-" * ANCHO_CARACTERES + "\n")
         
@@ -89,13 +110,10 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
         p.set(align='right', bold=True, double_height=True, double_width=False)
         p.text(f"TOTAL A PAGAR:  S/. {total:.2f}\n")
 
-        # Se estructuró mejor el método de pago con su respectivo identificador
         p.set(align='right', normal_textsize=True, bold=False, double_height=False)
-        p.text(f"Método de Pago: {data['metodo_pago']}\n")
+        p.text(f"Método de Pago: {data.get('metodo_pago', 'Efectivo')}\n")
         
-        # ==============================================================================
-        # 📝 NUEVA SECCIÓN: OBSERVACIONES ADICIONALES EN EL TICKET FÍSICO
-        # ==============================================================================
+        # --- OBSERVACIONES ADICIONALES ---
         observaciones = data.get('observaciones', '').strip()
         if observaciones:
             p.text("-" * ANCHO_CARACTERES + "\n")
@@ -103,12 +121,10 @@ def imprimir_ticket_escpos(data: dict, printer_name: str = "MP-POS80"):
             p.text("Observaciones:\n")
             p.set(bold=False)
             
-            # textwrap.wrap rompe el texto en un array de líneas sin cortar palabras
             lineas_obs = textwrap.wrap(observaciones, width=ANCHO_CARACTERES)
             for linea in lineas_obs:
                 p.text(f"{linea}\n")
         
-        # Retornamos la alineación para el mensaje de cierre
         p.set(align='center', normal_textsize=True, bold=False, double_height=False)
         p.text("\n*** GRACIAS ***\n")
         
