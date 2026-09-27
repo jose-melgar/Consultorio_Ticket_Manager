@@ -65,7 +65,6 @@ def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
     pago = ticket.metodo_pago.capitalize()
     nombre_paciente = ticket.paciente.nombre.upper()
 
-    # Guarda la descripción completa sin truncar
     descripcion_items = ", ".join([
         f"{item.nombre_especifico} x{item.cantidad}" if item.cantidad >= 2 else item.nombre_especifico 
         for item in ticket.items
@@ -146,8 +145,8 @@ def guardar_historial_json(venta_data):
     with open(HISTORIAL_JSON, 'w', encoding='utf-8') as f:
         json.dump(historial, f, indent=4, default=default_serializer, ensure_ascii=False)
 
-def desactivar_ticket_json(id_global: str) -> bool:
-    """Marca el ticket como no habilitado en ventas.json sin destruir la información."""
+def desactivar_ticket_json(id_global: str, motivo: str = "No se especificó motivo") -> bool:
+    """Marca el ticket como no habilitado en ventas.json sin destruir la información y registra el motivo."""
     if not os.path.exists(HISTORIAL_JSON): 
         return False
     with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
@@ -157,9 +156,12 @@ def desactivar_ticket_json(id_global: str) -> bool:
             return False
     
     encontrado = False
+    motivo_limpio = motivo.strip() if (motivo and motivo.strip()) else "No se especificó motivo"
+    
     for t in historial:
         if t.get("id_ticket_global") == id_global:
             t["habilitado"] = False
+            t["motivo_eliminacion"] = motivo_limpio
             encontrado = True
             break
             

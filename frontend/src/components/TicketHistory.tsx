@@ -31,7 +31,8 @@ interface TicketHistorial {
   descuento_especial_monto_soles?: number;
   descuento_especial_razon?: string;
   observaciones?: string;
-  habilitado?: boolean; // Propiedad interna de control de visibilidad
+  habilitado?: boolean;
+  motivo_eliminacion?: string;
 }
 
 interface TicketHistoryProps {
@@ -41,6 +42,12 @@ interface TicketHistoryProps {
 const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
   const [tickets, setTickets] = useState<TicketHistorial[]>([]);
   const [ticketModal, setTicketModal] = useState<TicketHistorial | null>(null);
+  const [vistaActual, setVistaActual] = useState<'activos' | 'eliminados'>('activos');
+
+  // Estados para el Input Box Modal de eliminación
+  const [ticketAEliminar, setTicketAEliminar] = useState<string | null>(null);
+  const [motivoEliminacion, setMotivoEliminacion] = useState<string>('');
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
   const fetchTickets = () => {
     fetch('http://localhost:5000/api/tickets')
@@ -71,32 +78,83 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
     }
   };
 
-  const handleEliminarTicket = async (id_global: string) => {
-    if (window.confirm(`⚠️ ADVERTENCIA ⚠️\n\n¿Estás absolutamente seguro de eliminar el ticket ${id_global}?\n\nEsto lo retirará de la vista y reajustará el archivo de contabilidad en Excel. Esta acción no se puede deshacer.`)) {
-      try {
-        const response = await fetch(`http://localhost:5000/api/eliminar-ticket/${id_global}`, {
-          method: 'DELETE',
-        });
-        
-        if (response.ok) {
-          alert(`Ticket ${id_global} retirado correctamente de la contabilidad.`);
-          fetchTickets();
-        } else {
-          alert("Hubo un problema al intentar eliminar el ticket.");
-        }
-      } catch (error) {
-        alert("Error de conexión al intentar eliminar.");
+  // Función que procesa la eliminación al presionar "Aceptar" en el Input Box Modal
+  const handleConfirmarEliminacion = async () => {
+    if (!ticketAEliminar) return;
+
+    setIsDeleting(true);
+    try {
+      const motivoFinal = motivoEliminacion.trim() || 'No se especificó motivo';
+
+      const response = await fetch(`http://localhost:5000/api/eliminar-ticket/${ticketAEliminar}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo: motivoFinal })
+      });
+      
+      if (response.ok) {
+        setTicketAEliminar(null);
+        setMotivoEliminacion('');
+        fetchTickets();
+      } else {
+        alert("Hubo un problema al intentar eliminar el ticket.");
       }
+    } catch (error) {
+      alert("Error de conexión al intentar eliminar.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
-  // Filtra únicamente los que no hayan sido deshabilitados internamente
-  const ticketsVisibles = tickets.filter(t => t.habilitado !== false);
+  const handleCancelarEliminacion = () => {
+    setTicketAEliminar(null);
+    setMotivoEliminacion('');
+  };
+
+  // Filtrado reactivo según pestaña
+  const ticketsMostrados = tickets.filter(t => 
+    vistaActual === 'activos' ? t.habilitado !== false : t.habilitado === false
+  );
 
   return (
     <div className="history-container">
       <h2>Historial de Tickets Generados</h2>
-      <button className="refresh-button" onClick={fetchTickets}>🔄 Actualizar Lista</button>
+
+      {/* Pestañas de cambio de vista */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button 
+            onClick={() => setVistaActual('activos')}
+            style={{
+              padding: '8px 16px',
+              border: 'none',
+              borderRadius: '5px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              backgroundColor: vistaActual === 'activos' ? '#007bff' : '#e0e0e0',
+              color: vistaActual === 'activos' ? '#fff' : '#333'
+            }}
+          >
+            🟢 Tickets Activos
+          </button>
+          <button 
+            onClick={() => setVistaActual('eliminados')}
+            style={{
+              padding: '8px 16px',
+              border: 'none',
+              borderRadius: '5px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              backgroundColor: vistaActual === 'eliminados' ? '#dc3545' : '#e0e0e0',
+              color: vistaActual === 'eliminados' ? '#fff' : '#333'
+            }}
+          >
+            🔴 Tickets Eliminados
+          </button>
+        </div>
+
+        <button className="refresh-button" onClick={fetchTickets}>🔄 Actualizar Lista</button>
+      </div>
       
       <table className="history-table">
         <thead>
@@ -106,22 +164,22 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
             <th>Fecha</th>
             <th>Paciente</th>
             <th>Total (S/.)</th>
-            <th>Acciones</th>
+            {vistaActual === 'eliminados' ? <th>Motivo de Eliminación</th> : <th>Acciones</th>}
           </tr>
         </thead>
         <tbody>
-          {ticketsVisibles.length === 0 ? (
-            <tr><td colSpan={6} style={{ textAlign: 'center' }}>No hay tickets registrados aún.</td></tr>
+          {ticketsMostrados.length === 0 ? (
+            <tr><td colSpan={6} style={{ textAlign: 'center' }}>No hay tickets {vistaActual} registrados aún.</td></tr>
           ) : (
-            [...ticketsVisibles].reverse().map((ticket, index) => (
-              <tr key={index}>
+            [...ticketsMostrados].reverse().map((ticket, index) => (
+              <tr key={index} style={{ backgroundColor: vistaActual === 'eliminados' ? '#fff3f3' : 'inherit' }}>
                 <td>
                   <button
                     onClick={() => setTicketModal(ticket)}
                     style={{
                       background: 'none',
                       border: 'none',
-                      color: '#007bff',
+                      color: vistaActual === 'eliminados' ? '#dc3545' : '#007bff',
                       textDecoration: 'underline',
                       fontWeight: 'bold',
                       cursor: 'pointer',
@@ -136,60 +194,158 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
                 <td>{ticket.fecha}</td>
                 <td>{ticket.paciente?.nombre || 'Desconocido'}</td>
                 <td>S/. {parseFloat(String(ticket.total_final)).toFixed(2)}</td>
-                <td style={{ textAlign: 'center' }}>
-                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center' }}>
-                    <button 
-                      onClick={() => {
-                        if (onCargarPaciente && ticket.paciente) {
-                          onCargarPaciente(ticket.paciente.nombre || '', ticket.paciente.dni || '');
-                        }
-                      }}
-                      style={{ backgroundColor: '#28a745', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                      title="Cargar Nombre y DNI para un nuevo ticket"
-                    >
-                      👤 Cargar
-                    </button>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                      <label htmlFor={`copias-${ticket.id_ticket_global}`} style={{ fontSize: '11px', margin: 0 }}>Cops:</label>
-                      <input 
-                        type="number" 
-                        min="1" 
-                        max="5" 
-                        defaultValue="1" 
-                        id={`copias-${ticket.id_ticket_global}`}
-                        style={{ width: '40px', padding: '2px', textAlign: 'center', fontSize: '12px' }}
-                      />
+                {vistaActual === 'eliminados' ? (
+                  <td style={{ color: '#dc3545', fontSize: '13px', textAlign: 'left' }}>
+                    {ticket.motivo_eliminacion || 'No se especificó motivo'}
+                  </td>
+                ) : (
+                  <td style={{ textAlign: 'center' }}>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center' }}>
+                      <button 
+                        onClick={() => {
+                          if (onCargarPaciente && ticket.paciente) {
+                            onCargarPaciente(ticket.paciente.nombre || '', ticket.paciente.dni || '');
+                          }
+                        }}
+                        style={{ backgroundColor: '#28a745', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                        title="Cargar Nombre y DNI para un nuevo ticket"
+                      >
+                        👤 Cargar
+                      </button>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <label htmlFor={`copias-${ticket.id_ticket_global}`} style={{ fontSize: '11px', margin: 0 }}>Cops:</label>
+                        <input 
+                          type="number" 
+                          min="1" 
+                          max="5" 
+                          defaultValue="1" 
+                          id={`copias-${ticket.id_ticket_global}`}
+                          style={{ width: '40px', padding: '2px', textAlign: 'center', fontSize: '12px' }}
+                        />
+                      </div>
+
+                      <button 
+                        onClick={() => {
+                          const input = document.getElementById(`copias-${ticket.id_ticket_global}`) as HTMLInputElement;
+                          const cant = input ? parseInt(input.value) : 1;
+                          handleReimprimir(ticket.id_ticket_global, cant);
+                        }}
+                        style={{ backgroundColor: '#007bff', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        title="Reimprimir este ticket automáticamente"
+                      >
+                        🖨️ Imprimir
+                      </button>
+
+                      <button 
+                        onClick={() => setTicketAEliminar(ticket.id_ticket_global)} 
+                        style={{ backgroundColor: '#dc3545', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                        title="Eliminar del sistema"
+                      >
+                        🗑️ Borrar
+                      </button>
                     </div>
-
-                    <button 
-                      onClick={() => {
-                        const input = document.getElementById(`copias-${ticket.id_ticket_global}`) as HTMLInputElement;
-                        const cant = input ? parseInt(input.value) : 1;
-                        handleReimprimir(ticket.id_ticket_global, cant);
-                      }}
-                      style={{ backgroundColor: '#007bff', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                      title="Reimprimir este ticket automáticamente"
-                    >
-                      🖨️ Imprimir
-                    </button>
-
-                    <button 
-                      onClick={() => handleEliminarTicket(ticket.id_ticket_global)} 
-                      style={{ backgroundColor: '#dc3545', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                      title="Eliminar del sistema"
-                    >
-                      🗑️ Borrar
-                    </button>
-                  </div>
-                </td>
+                  </td>
+                )}
               </tr>
             ))
           )}
         </tbody>
       </table>
 
-      {/* MODAL CON ANCHO COMPLETO PARA CADA DESCRIPCIÓN */}
+      {/* ============================================================================== */}
+      {/* 🛑 INPUT BOX MODAL: SOLICITUD DE MOTIVO DE ELIMINACIÓN                          */}
+      {/* ============================================================================== */}
+      {ticketAEliminar && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 10000
+          }}
+        >
+          <div 
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '8px',
+              padding: '24px',
+              width: '420px',
+              boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '15px'
+            }}
+          >
+            <h3 style={{ margin: 0, color: '#dc3545', fontSize: '18px' }}>
+              ⚠️ Eliminar Ticket {ticketAEliminar}
+            </h3>
+            <p style={{ margin: 0, fontSize: '13px', color: '#555', lineHeight: '1.4' }}>
+              Esta acción retirará el ticket de la contabilidad en Excel. Ingrese el motivo de eliminación (opcional):
+            </p>
+            <input 
+              type="text" 
+              placeholder="Ej. Paciente canceló atención / Error de digitación..."
+              value={motivoEliminacion}
+              onChange={(e) => setMotivoEliminacion(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                borderRadius: '4px',
+                border: '1px solid #ccc',
+                fontSize: '13px',
+                boxSizing: 'border-box'
+              }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '5px' }}>
+              <button 
+                type="button" 
+                onClick={handleCancelarEliminacion}
+                disabled={isDeleting}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '4px',
+                  border: '1px solid #ccc',
+                  backgroundColor: '#dc3545',
+                  cursor: isDeleting ? 'not-allowed' : 'pointer',
+                  fontSize: '13px'
+                }}
+              >
+                Cancelar
+              </button>
+              <button 
+                type="button" 
+                onClick={handleConfirmarEliminacion}
+                disabled={isDeleting}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '4px',
+                  border: 'none',
+                  backgroundColor: '#35dc46',
+                  color: '#ffffff',
+                  fontWeight: 'bold',
+                  cursor: isDeleting ? 'not-allowed' : 'pointer',
+                  fontSize: '13px'
+                }}
+              >
+                {isDeleting ? 'Eliminando...' : 'Aceptar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================================== */}
+      {/* 🧾 MODAL FLOTANTE: VISTA PREVIA SIMULADA DEL TICKET EN PANTALLA                */}
+      {/* ============================================================================== */}
       {ticketModal && (
         <div 
           style={{
@@ -244,7 +400,12 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
               ✕
             </button>
 
-            {/* Logo y Encabezado */}
+            {ticketModal.habilitado === false && (
+              <div style={{ backgroundColor: '#dc3545', color: 'white', textAlign: 'center', padding: '4px', fontWeight: 'bold', marginBottom: '8px', borderRadius: '4px', fontSize: '12px' }}>
+                *** TICKET ELIMINADO ***
+              </div>
+            )}
+
             <div style={{ textAlign: 'center', marginBottom: '12px' }}>
               <img 
                 src={logoColor} 
@@ -257,7 +418,6 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
 
             <div style={{ borderBottom: '1px dashed #000', margin: '8px 0' }} />
 
-            {/* Datos del Paciente */}
             <div style={{ marginBottom: '10px' }}>
               <p style={{ margin: '2px 0', fontWeight: 'bold' }}>TICKET: {ticketModal.id_ticket_global}</p>
               <p style={{ margin: '2px 0' }}>Op: {ticketModal.id_ticket_especifico}</p>
@@ -270,7 +430,6 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
 
             <div style={{ borderBottom: '1px dashed #000', margin: '8px 0' }} />
 
-            {/* Lista de Servicios (Ancho Completo) */}
             <div style={{ marginBottom: '10px' }}>
               <div style={{ borderBottom: '1px solid #000', paddingBottom: '3px', fontWeight: 'bold', fontSize: '12px' }}>
                 DETALLE DE SERVICIOS
@@ -301,7 +460,6 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
 
             <div style={{ borderBottom: '1px dashed #000', margin: '8px 0' }} />
 
-            {/* Descuentos */}
             {ticketModal.descuento_especial_activo && (
               <div style={{ textAlign: 'right', marginBottom: '6px', fontSize: '12px' }}>
                 {ticketModal.descuento_especial_monto_soles && (
@@ -317,7 +475,6 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
               </div>
             )}
 
-            {/* Total y Método de Pago */}
             <div style={{ textAlign: 'right', fontWeight: 'bold', fontSize: '15px', margin: '8px 0' }}>
               TOTAL A PAGAR: S/. {parseFloat(String(ticketModal.total_final)).toFixed(2)}
             </div>
@@ -326,7 +483,16 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
               Método de Pago: {ticketModal.metodo_pago || 'Efectivo'}
             </div>
 
-            {/* Observaciones */}
+            {ticketModal.motivo_eliminacion && (
+              <>
+                <div style={{ borderBottom: '1px dashed #000', margin: '8px 0' }} />
+                <div style={{ textAlign: 'left', marginBottom: '8px', color: '#dc3545' }}>
+                  <p style={{ margin: '0 0 2px 0', fontWeight: 'bold' }}>Motivo de Eliminación:</p>
+                  <p style={{ margin: 0, fontSize: '12px' }}>{ticketModal.motivo_eliminacion}</p>
+                </div>
+              </>
+            )}
+
             {ticketModal.observaciones && ticketModal.observaciones.trim() !== '' && (
               <>
                 <div style={{ borderBottom: '1px dashed #000', margin: '8px 0' }} />

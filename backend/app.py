@@ -187,8 +187,12 @@ def registrar():
 @app.route("/api/eliminar-ticket/<id_global>", methods=["DELETE"])
 def eliminar_ticket(id_global):
     try:
-        # 1. En el JSON se apaga el switch interno para ocultarlo del frontend
-        json_ok = desactivar_ticket_json(id_global)
+        payload = request.get_json(silent=True) or {}
+        motivo_req = payload.get("motivo", "").strip()
+        motivo = motivo_req if motivo_req else "No se especificó motivo"
+
+        # 1. En el JSON se apaga el switch interno y se almacena la justificación
+        json_ok = desactivar_ticket_json(id_global, motivo)
         
         # 2. En el Excel sí se elimina la fila para mantener cuadrada la caja
         excel_ok = eliminar_ticket_excel(id_global)
@@ -196,7 +200,8 @@ def eliminar_ticket(id_global):
         # 3. El archivo PDF NO se elimina: se preserva en disco como respaldo
         if json_ok or excel_ok:
             return jsonify({
-                "message": f"Ticket {id_global} retirado de la contabilidad y ocultado de la pantalla.",
+                "message": f"Ticket {id_global} retirado de la contabilidad.",
+                "motivo_registrado": motivo,
                 "ocultado_en_historial": json_ok,
                 "eliminado_de_excel": excel_ok
             }), 200
