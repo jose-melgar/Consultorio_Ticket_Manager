@@ -31,6 +31,7 @@ interface TicketHistorial {
   descuento_especial_monto_soles?: number;
   descuento_especial_razon?: string;
   observaciones?: string;
+  habilitado?: boolean; // Propiedad interna de control de visibilidad
 }
 
 interface TicketHistoryProps {
@@ -71,14 +72,14 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
   };
 
   const handleEliminarTicket = async (id_global: string) => {
-    if (window.confirm(`⚠️ ADVERTENCIA ⚠️\n\n¿Estás absolutamente seguro de eliminar el ticket ${id_global}?\n\nEsto lo borrará del sistema, eliminará el PDF y reajustará el archivo de contabilidad en Excel. Esta acción no se puede deshacer.`)) {
+    if (window.confirm(`⚠️ ADVERTENCIA ⚠️\n\n¿Estás absolutamente seguro de eliminar el ticket ${id_global}?\n\nEsto lo retirará de la vista y reajustará el archivo de contabilidad en Excel. Esta acción no se puede deshacer.`)) {
       try {
         const response = await fetch(`http://localhost:5000/api/eliminar-ticket/${id_global}`, {
           method: 'DELETE',
         });
         
         if (response.ok) {
-          alert(`Ticket ${id_global} eliminado correctamente de la contabilidad.`);
+          alert(`Ticket ${id_global} retirado correctamente de la contabilidad.`);
           fetchTickets();
         } else {
           alert("Hubo un problema al intentar eliminar el ticket.");
@@ -88,6 +89,9 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
       }
     }
   };
+
+  // Filtra únicamente los que no hayan sido deshabilitados internamente
+  const ticketsVisibles = tickets.filter(t => t.habilitado !== false);
 
   return (
     <div className="history-container">
@@ -106,10 +110,10 @@ const TicketHistory: React.FC<TicketHistoryProps> = ({ onCargarPaciente }) => {
           </tr>
         </thead>
         <tbody>
-          {tickets.length === 0 ? (
+          {ticketsVisibles.length === 0 ? (
             <tr><td colSpan={6} style={{ textAlign: 'center' }}>No hay tickets registrados aún.</td></tr>
           ) : (
-            [...tickets].reverse().map((ticket, index) => (
+            [...ticketsVisibles].reverse().map((ticket, index) => (
               <tr key={index}>
                 <td>
                   <button

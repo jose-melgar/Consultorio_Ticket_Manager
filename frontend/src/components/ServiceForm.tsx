@@ -51,6 +51,9 @@ const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
   const [metodoSeleccionado, setMetodoSeleccionado] = useState('');
   const [listaPagos, setListaPagos] = useState<PagoMetodo[]>([]);
 
+  // --- ESTADO PARA CONTROLAR ENVÍO ÚNICO (PREVENCIÓN DE CLICS MÚLTIPLES) ---
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Cargar datos prellenados únicamente si vienen desde el botón "Cargar" del Historial
   useEffect(() => {
     if (prefilledPatient) {
@@ -190,6 +193,7 @@ const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
 
   const handleFinalizarVenta = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return; // Bloqueo de seguridad inmediato contra clics múltiples
     if (!ticketItems.length || !patientName || patientDNI.length !== 8) return;
     if (diferenciaCaja > 0) return; // Bloqueo de seguridad secundario
 
@@ -197,6 +201,8 @@ const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
         alert("Por favor, ingrese el motivo del descuento especial.");
         return;
     }
+
+    setIsSubmitting(true); // Se bloquea el botón
 
     const ventaData = {
       paciente: { nombre: patientName, dni: patientDNI },
@@ -242,6 +248,8 @@ const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
       }
     } catch (error) {
       alert("Error de conexión con el servidor.");
+    } finally {
+      setIsSubmitting(false); // Se libera el botón cuando termina el proceso
     }
   };
 
@@ -340,7 +348,7 @@ const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
              <h3>Total a Pagar: S/. {totalCalculado.toFixed(2)}</h3>
           )}
 
-          {/* --- SUBMÓDULO: GESTIÓN DE MÚLTIPLES MÉTODOS DE PAGO (BOCETO DE JOSÉ) --- */}
+          {/* --- SUBMÓDULO: GESTIÓN DE MÚLTIPLES MÉTODOS DE PAGO --- */}
           <div style={{ border: '1px solid #ccc', padding: '12px', borderRadius: '6px', marginTop: '15px', backgroundColor: '#f9f9f9' }}>
             <h4 style={{ margin: '0 0 10px 0', color: '#333' }}>Control de Caja y Métodos de Pago</h4>
             
@@ -367,7 +375,7 @@ const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
               </button>
             </div>
 
-            {/* Lista dinámicos de métodos agregados */}
+            {/* Lista dinámica de métodos agregados */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '10px' }}>
               {listaPagos.map((pago, idx) => (
                 <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#fff', padding: '6px', borderRadius: '4px', border: '1px solid #ddd' }}>
@@ -410,8 +418,17 @@ const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
           </div>
 
           <div style={{ display: 'flex', gap: '15px', marginTop: '20px' }}>
-            <button type="button" onClick={handleAnularVenta} style={{ backgroundColor: '#dc3545', color: 'white', cursor: 'pointer' }} disabled={!ticketItems.length && !patientName && !patientDNI}>Anular Operación</button>
-            <button type="submit" style={{ backgroundColor: diferenciaCaja > 0 ? '#ccc' : '#007bff', cursor: diferenciaCaja > 0 ? 'not-allowed' : 'pointer' }} disabled={!ticketItems.length || !patientName || diferenciaCaja > 0}>Generar Ticket</button>
+            <button type="button" onClick={handleAnularVenta} style={{ backgroundColor: '#dc3545', color: 'white', cursor: 'pointer' }} disabled={(!ticketItems.length && !patientName && !patientDNI) || isSubmitting}>Anular Operación</button>
+            <button 
+              type="submit" 
+              style={{ 
+                backgroundColor: (diferenciaCaja > 0 || isSubmitting) ? '#ccc' : '#007bff', 
+                cursor: (diferenciaCaja > 0 || isSubmitting) ? 'not-allowed' : 'pointer' 
+              }} 
+              disabled={!ticketItems.length || !patientName || diferenciaCaja > 0 || isSubmitting}
+            >
+              {isSubmitting ? '⏳ Imprimiendo...' : 'Generar Ticket'}
+            </button>
           </div>
         </fieldset>
       </form>

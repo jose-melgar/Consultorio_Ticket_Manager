@@ -14,7 +14,7 @@ from catalog_manager import (
     registrar_venta_excel, 
     guardar_historial_json, 
     leer_historial_ventas,
-    eliminar_ticket_json,
+    desactivar_ticket_json,
     eliminar_ticket_excel
 )
 from pdf_generator import generar_ticket_pdf
@@ -157,6 +157,7 @@ def registrar():
             "vuelto": str(data.get("vuelto", 0)),
             "desglose_pagos": data.get("desglose_pagos", []),
             "destino": ticket.destino,
+            "habilitado": True,
             "atendido_por": "José Melgar"
         }
 
@@ -186,23 +187,18 @@ def registrar():
 @app.route("/api/eliminar-ticket/<id_global>", methods=["DELETE"])
 def eliminar_ticket(id_global):
     try:
-        json_ok = eliminar_ticket_json(id_global)
+        # 1. En el JSON se apaga el switch interno para ocultarlo del frontend
+        json_ok = desactivar_ticket_json(id_global)
+        
+        # 2. En el Excel sí se elimina la fila para mantener cuadrada la caja
         excel_ok = eliminar_ticket_excel(id_global)
         
-        pdf_ok = False
-        if os.path.exists(TICKETS_DIR):
-            for archivo in os.listdir(TICKETS_DIR):
-                if archivo.endswith(f"_{id_global}.pdf"):
-                    os.remove(os.path.join(TICKETS_DIR, archivo))
-                    pdf_ok = True
-                    break
-                    
+        # 3. El archivo PDF NO se elimina: se preserva en disco como respaldo
         if json_ok or excel_ok:
             return jsonify({
-                "message": f"Ticket {id_global} removido con éxito del sistema.",
-                "historial_json": json_ok,
-                "libro_excel": excel_ok,
-                "archivo_pdf": pdf_ok
+                "message": f"Ticket {id_global} retirado de la contabilidad y ocultado de la pantalla.",
+                "ocultado_en_historial": json_ok,
+                "eliminado_de_excel": excel_ok
             }), 200
         else:
             return jsonify({"error": "El ID de ticket no existe en el sistema."}), 404

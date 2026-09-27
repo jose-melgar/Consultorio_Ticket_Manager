@@ -133,21 +133,39 @@ def guardar_historial_json(venta_data):
     historial = []
     if os.path.exists(HISTORIAL_JSON):
         with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
-            historial = json.load(f)
+            try:
+                historial = json.load(f)
+            except Exception:
+                historial = []
+    
+    # Campo interno de control para visibilidad en frontend
+    if "habilitado" not in venta_data:
+        venta_data["habilitado"] = True
     
     historial.append(venta_data)
     with open(HISTORIAL_JSON, 'w', encoding='utf-8') as f:
         json.dump(historial, f, indent=4, default=default_serializer, ensure_ascii=False)
 
-def eliminar_ticket_json(id_global: str) -> bool:
-    if not os.path.exists(HISTORIAL_JSON): return False
+def desactivar_ticket_json(id_global: str) -> bool:
+    """Marca el ticket como no habilitado en ventas.json sin destruir la información."""
+    if not os.path.exists(HISTORIAL_JSON): 
+        return False
     with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
-        historial = json.load(f)
+        try:
+            historial = json.load(f)
+        except Exception:
+            return False
     
-    nuevo_historial = [t for t in historial if t["id_ticket_global"] != id_global]
-    if len(historial) != len(nuevo_historial):
+    encontrado = False
+    for t in historial:
+        if t.get("id_ticket_global") == id_global:
+            t["habilitado"] = False
+            encontrado = True
+            break
+            
+    if encontrado:
         with open(HISTORIAL_JSON, 'w', encoding='utf-8') as f:
-            json.dump(nuevo_historial, f, indent=4, ensure_ascii=False)
+            json.dump(historial, f, indent=4, ensure_ascii=False)
         return True
     return False
 
@@ -191,4 +209,7 @@ def eliminar_ticket_excel(id_global: str) -> bool:
 def leer_historial_ventas():
     if not os.path.exists(HISTORIAL_JSON): return []
     with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except Exception:
+            return []
