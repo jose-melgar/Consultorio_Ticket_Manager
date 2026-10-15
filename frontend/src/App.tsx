@@ -47,7 +47,7 @@ const App: React.FC = () => {
       </nav>
 
       <main className="app-main">
-        {currentView === 'form' && <ServiceForm prefilledPatient={prefilledPatient} />}
+        {currentView === 'form' && <ServiceForm prefilledPatient={prefilledPatient} onPatientLoaded={() => setPrefilledPatient(null)} />}
         {currentView === 'history' && <TicketHistory onCargarPaciente={handleCargarPaciente} />}
       </main>
       

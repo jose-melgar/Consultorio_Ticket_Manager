@@ -16,6 +16,10 @@ backend/build/
 
 # --- BACKEND (Python) ---
 venv/
+.venv/
+.test-runtime/
+*.sqlite3
+*.sqlite3-*
 __pycache__/
 *.py[cod]
 *.log

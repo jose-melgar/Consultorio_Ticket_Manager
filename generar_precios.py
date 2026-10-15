@@ -1,35 +1,38 @@
-import os
-import pandas as pd
+"""Creates demo catalogs only in a NEW directory; never overwrites customer files."""
+import argparse
+from pathlib import Path
+from openpyxl import Workbook
 
-# 1. Asegurarnos de que la carpeta "data" exista
-base_dir = os.path.dirname(os.path.abspath(__file__))
-data_dir = os.path.join(base_dir, 'data')
+GENERAL = 'Lista de Precios-Las Marianas.xlsx'
+DENTAL = 'Lista de Precios-Dental.xlsx'
 
-if not os.path.exists(data_dir):
-    os.makedirs(data_dir)
+def generate(directory):
+    target = Path(directory).resolve()
+    # Exclusive directory creation prevents accidental overwrite or partial replacement.
+    target.mkdir(parents=True, exist_ok=False)
+    sheets = {
+        GENERAL: [['ID_General', 'Categoría', 'Nombre Específico', 'Precio Unitario', 'Costo Laboratorio', 'Costo Insumos', 'Descuento'],
+                  ['LM-001', 'CONSULTA', 'Consulta Médica General', 30, 0, 10, 0],
+                  ['LM-002', 'LABORATORIO', 'Hemograma Completo', 75.50, 12.30, 0, 0],
+                  ['LM-003', 'PROCEDIMIENTO', 'Ecografía Pélvica', 70, 0, 0.20, 0]],
+        DENTAL: [['ID_Dental', 'Categoría', 'Nombre Específico', 'Precio Unitario', 'Costo', 'Descuento'],
+                 ['DENT-001', 'CONSULTA ODONTOLOGICA', 'Consulta Odontológica', 20, 11, 0],
+                 ['DENT-002', 'PROCEDIMIENTO', 'Curación Simple', 50, 15, 0],
+                 ['DENT-003', 'INSUMO', 'Anestesia Dental', 10, 2, 0]],
+    }
+    for name, rows in sheets.items():
+        wb = Workbook()
+        for row in rows:
+            wb.active.append(row)
+        wb.save(target / name)
+        wb.close()
+    return target
 
-# 2. Datos estándar para Las Marianas (General)
-datos_general = {
-    'ID_General': ['LM-001', 'LM-002', 'LM-003'],
-    'Categoría': ['CONSULTA', 'LABORATORIO', 'PROCEDIMIENTO'],
-    'Nombre Específico': ['Consulta Médica General', 'Hemograma Completo', 'Ecografía Pélvica'],
-    'Precio Unitario': [30.00, 75.50, 70.00],
-    'Costo': [10.00, 12.30, 0.20]
-}
-df_general = pd.DataFrame(datos_general)
-ruta_general = os.path.join(data_dir, 'Lista de Precios-Las Marianas.xlsx')
-df_general.to_excel(ruta_general, index=False)
-
-# 3. Datos estándar para Dental
-datos_dental = {
-    'ID_Dental': ['DENT-001', 'DENT-002', 'DENT-003'],
-    'Categoría': ['CONSULTA ODONTOLOGICA', 'PROCEDIMIENTO', 'INSUMO'],
-    'Nombre Específico': ['Consulta Odontológica', 'Curación Simple', 'Anestesia Dental'],
-    'Precio Unitario': [20.00, 50.00, 10.00],
-    'Costo': [11.00, 15.00, 2.00]
-}
-df_dental = pd.DataFrame(datos_dental)
-ruta_dental = os.path.join(data_dir, 'Lista de Precios-Dental.xlsx')
-df_dental.to_excel(ruta_dental, index=False)
-
-print("✅ ¡Archivos Excel creados con éxito en la carpeta 'data'!")
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', required=True, help='Directorio nuevo para los catálogos de demostración')
+    args = parser.parse_args()
+    try:
+        print('Catálogos de demostración creados:', generate(args.output))
+    except FileExistsError:
+        parser.exit(1, 'El directorio ya existe; no se modificó ningún catálogo.\n')

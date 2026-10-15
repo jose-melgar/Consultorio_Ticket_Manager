@@ -1,217 +1,129 @@
-import pandas as pd
-import os
-import json
-from datetime import datetime
-from typing import List, Dict
+"""Validated Excel catalogs and idempotent accounting exports (not primary storage)."""
 from decimal import Decimal
-from openpyxl import load_workbook
+import os
+from pathlib import Path
+import tempfile
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
-CATALOGO_GENERAL = os.path.join(DATA_DIR, "Lista de Precios-Las Marianas.xlsx")
-CATALOGO_DENTAL = os.path.join(DATA_DIR, "Lista de Precios-Dental.xlsx")
-HISTORIAL_JSON = os.path.join(DATA_DIR, "ventas.json")
-ID_COUNTER_FILE = os.path.join(DATA_DIR, "id_counters.json")
+from openpyxl import Workbook, load_workbook
+from models import ValidationError, money, text
 
-# --- RUTAS SEPARADAS DE CONTABILIDAD ---
-LIBRO_MARIANAS = os.path.join(DATA_DIR, "Contabilidad_Las_Marianas.xlsx")
-LIBRO_DENTAL = os.path.join(DATA_DIR, "Contabilidad_Dental.xlsx")
+GENERAL = 'Lista de Precios-Las Marianas.xlsx'
+DENTAL = 'Lista de Precios-Dental.xlsx'
+COLUMNS = ['Fecha', 'nota de venta', 'Pago', 'Nombre', 'Descripción', 'A cuenta',
+           'ingresos', 'Egresos - gastos', 'LABORATORIO', 'Insumos de lab',
+           'Ganancia', 'Saldos', 'observaciones']
 
-def obtener_libro_contable(destino: str) -> str:
-    """Retorna la ruta del archivo Excel correspondiente según el destino de la venta."""
-    if str(destino).lower() == 'dental':
-        return LIBRO_DENTAL
-    return LIBRO_MARIANAS
+class CatalogError(RuntimeError):
+    pass
 
-def cargar_catalogos():
-    return {
-        "General": pd.read_excel(CATALOGO_GENERAL),
-        "Dental": pd.read_excel(CATALOGO_DENTAL)
-    }
+def normalize_accounting_header(value):
+    """Accept the existing note-number label without changing workbook headers."""
+    normalized = ' '.join(str(value or '').split()).casefold()
+    if normalized == 'id nota de venta':
+        return 'nota de venta'
+    return normalized
 
-def generar_nuevos_ids(destino: str):
-    if not os.path.exists(ID_COUNTER_FILE):
-        counters = {"global": 0, "general": 0, "dental": 0}
-    else:
-        with open(ID_COUNTER_FILE, 'r', encoding='utf-8') as f:
-            counters = json.load(f)
 
-    counters["global"] += 1
-    if destino.lower() == 'general':
-        counters["general"] += 1
-        id_esp = f'LM-{counters["general"]:04d}'
-    else:
-        counters["dental"] += 1
-        id_esp = f'DEN-{counters["dental"]:04d}'
-    
-    id_glob = f'TK-{counters["global"]:04d}'
-    with open(ID_COUNTER_FILE, 'w', encoding='utf-8') as f:
-        json.dump(counters, f, indent=4)
-    return id_glob, id_esp
-
-def registrar_venta_excel(ticket, id_global, id_especifico, venta_final):
-    """
-    Registra la venta en el libro contable respectivo (General o Dental)
-    e inyecta la fórmula de Excel para arrastrar saldos automáticos.
-    """
-    columnas = [
-        "Fecha", "nota de venta", "Pago", "Nombre", "Descripción", "A cuenta", 
-        "ingresos", "Egresos - gastos", "LABORATORIO", "Insumos de lab", 
-        "Ganancia", "Saldos", "observaciones"
-    ]
-    
-    libro_destino = obtener_libro_contable(ticket.destino)
-    fecha = datetime.now().strftime("%d.%m.%y")
-    num_nota = f"{id_global} | {id_especifico}"
-    pago = ticket.metodo_pago.capitalize()
-    nombre_paciente = ticket.paciente.nombre.upper()
-
-    descripcion_items = ", ".join([
-        f"{item.nombre_especifico} x{item.cantidad}" if item.cantidad >= 2 else item.nombre_especifico 
-        for item in ticket.items
-    ])
-    
-    ingresos = float(ticket.total_final)
-    egresos_servicios = 0.0
-    egresos_insumos = 0.0
-    
-    if ticket.destino.lower() == 'dental':
-        for item in ticket.items:
-            if "insumo" in item.categoria.lower() or "medicamento" in item.categoria.lower():
-                egresos_insumos += float(item.costo_unitario) * item.cantidad
-            else:
-                egresos_servicios += float(item.costo_unitario) * item.cantidad
-    else:
-        for item in ticket.items:
-            egresos_servicios += float(getattr(item, 'costo_lab', 0)) * item.cantidad
-            egresos_insumos += float(getattr(item, 'costo_insumo', 0)) * item.cantidad
-
-    ganancia = ingresos - (egresos_servicios + egresos_insumos)
-
-    obs = venta_final.get('observaciones', '')
-    if venta_final.get('descuento_especial_activo'):
-        obs += f" | Desc: {venta_final.get('descuento_especial_razon', '')}"
-
-    nueva_fila = {
-        "Fecha": fecha,
-        "nota de venta": num_nota,
-        "Pago": pago,
-        "Nombre": nombre_paciente,
-        "Descripción": descripcion_items,
-        "A cuenta": 0,
-        "ingresos": ingresos,
-        "Egresos - gastos": 0,
-        "LABORATORIO": egresos_servicios,
-        "Insumos de lab": egresos_insumos,
-        "Ganancia": ganancia,
-        "Saldos": "", 
-        "observaciones": obs
-    }
-
-    if not os.path.exists(libro_destino):
-        df = pd.DataFrame([nueva_fila], columns=columnas)
-        df.loc[0, "Saldos"] = "=K2"
-        df.to_excel(libro_destino, index=False)
-    else:
-        wb = load_workbook(libro_destino)
-        ws = wb.active
-        start_row = ws.max_row + 1
-        wb.close()
-        
-        formula_saldo = f"=L{start_row-1}+K{start_row}"
-
-        with pd.ExcelWriter(libro_destino, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
-            df_nuevo = pd.DataFrame([nueva_fila], columns=columnas)
-            df_nuevo.loc[0, "Saldos"] = formula_saldo
-            df_nuevo.to_excel(writer, index=False, header=False, startrow=start_row-1)
-
-def guardar_historial_json(venta_data):
-    def default_serializer(obj):
-        if isinstance(obj, Decimal): return str(obj)
-        raise TypeError
-    
-    historial = []
-    if os.path.exists(HISTORIAL_JSON):
-        with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
+def cargar_catalogos(data_dir):
+    result = {}
+    for destination, filename, ident in [('general', GENERAL, 'ID_General'), ('dental', DENTAL, 'ID_Dental')]:
+        path = Path(data_dir) / filename
+        try:
+            wb = load_workbook(path, read_only=True, data_only=True)
             try:
-                historial = json.load(f)
-            except Exception:
-                historial = []
-    
-    # Campo interno de control para visibilidad en frontend
-    if "habilitado" not in venta_data:
-        venta_data["habilitado"] = True
-    
-    historial.append(venta_data)
-    with open(HISTORIAL_JSON, 'w', encoding='utf-8') as f:
-        json.dump(historial, f, indent=4, default=default_serializer, ensure_ascii=False)
+                rows = iter(wb.active.values)
+                headers = next(rows, ())
+                required = {ident, 'Categoría', 'Nombre Específico', 'Precio Unitario'}
+                required |= {'Costo Laboratorio', 'Costo Insumos'} if destination == 'general' else {'Costo'}
+                if len(headers) != len(set(headers)) or not required.issubset(headers):
+                    raise CatalogError(f'{filename}: faltan columnas o existen encabezados duplicados.')
+                records, ids = [], set()
+                for values in rows:
+                    if not any(v is not None for v in values):
+                        continue
+                    row = dict(zip(headers, values))
+                    service_id = text(str(row.get(ident) or ''), 'ID de catálogo', 80)
+                    if service_id in ids or service_id == 'OTROS':
+                        raise CatalogError(f'{filename}: ID duplicado o reservado.')
+                    ids.add(service_id)
+                    record = {ident: service_id, 'Categoría': text(row['Categoría'], 'Categoría'),
+                              'Nombre Específico': text(row['Nombre Específico'], 'Servicio')}
+                    for column in ['Precio Unitario', 'Descuento'] + (['Costo Laboratorio', 'Costo Insumos'] if destination == 'general' else ['Costo']):
+                        record[column] = str(money(row.get(column) if row.get(column) is not None else 0, column))
+                    if Decimal(record['Descuento']) > Decimal(record['Precio Unitario']):
+                        raise CatalogError(f'{filename}: un descuento supera el precio.')
+                    records.append(record)
+                result[destination] = records
+            finally:
+                wb.close()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise CatalogError(f'No se pudo cargar {filename}. Revise el archivo y sus columnas.') from exc
+    return result
 
-def desactivar_ticket_json(id_global: str, motivo: str = "No se especificó motivo") -> bool:
-    """Marca el ticket como no habilitado en ventas.json sin destruir la información y registra el motivo."""
-    if not os.path.exists(HISTORIAL_JSON): 
-        return False
-    with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
-        try:
-            historial = json.load(f)
-        except Exception:
-            return False
-    
-    encontrado = False
-    motivo_limpio = motivo.strip() if (motivo and motivo.strip()) else "No se especificó motivo"
-    
-    for t in historial:
-        if t.get("id_ticket_global") == id_global:
-            t["habilitado"] = False
-            t["motivo_eliminacion"] = motivo_limpio
-            encontrado = True
-            break
-            
-    if encontrado:
-        with open(HISTORIAL_JSON, 'w', encoding='utf-8') as f:
-            json.dump(historial, f, indent=4, ensure_ascii=False)
-        return True
-    return False
+def atomic_bytes(path, contents):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.ticket-', suffix=path.suffix, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(contents)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
-def eliminar_ticket_excel(id_global: str) -> bool:
-    """Busca y elimina el ticket en ambos libros contables si existe."""
-    libros = [LIBRO_MARIANAS, LIBRO_DENTAL]
-    eliminado = False
-
-    for libro in libros:
-        if not os.path.exists(libro):
-            continue
-        
-        wb = load_workbook(libro)
+def sync_accounting(data_dir, sale):
+    filename = 'Contabilidad_Dental.xlsx' if sale['destino'] == 'Dental' else 'Contabilidad_Las_Marianas.xlsx'
+    path = Path(data_dir) / filename
+    wb = load_workbook(path) if path.exists() else Workbook()
+    try:
         ws = wb.active
-        
-        fila_a_eliminar = None
-        for r in range(2, ws.max_row + 1):
-            if id_global in str(ws.cell(row=r, column=2).value or ""):
-                fila_a_eliminar = r
-                break
-                
-        if fila_a_eliminar:
-            ws.delete_rows(fila_a_eliminar)
-            
-            # Reestructurar fórmulas de saldos automáticos
-            for r in range(fila_a_eliminar, ws.max_row + 1):
-                if r == 2:
-                    ws.cell(row=r, column=12, value="=K2")
-                else:
-                    ws.cell(row=r, column=12, value=f"=L{r-1}+K{r}")
-                    
-            wb.save(libro)
-            wb.close()
-            eliminado = True
-            break
+        if not path.exists():
+            ws.append(COLUMNS)
+        headers = list(next(ws.values))[:len(COLUMNS)]
+        if [normalize_accounting_header(value) for value in headers] != [normalize_accounting_header(value) for value in COLUMNS]:
+            raise CatalogError('El libro contable tiene encabezados incompatibles. Revise sus columnas; el archivo se conservó sin cambios.')
+        matches = [r for r in range(2, ws.max_row + 1)
+                   if str(ws.cell(r, 2).value or '').split('|', 1)[0].strip() == sale['id_ticket_global']]
+        if sale.get('habilitado') is False:
+            for row in reversed(matches):
+                ws.delete_rows(row)
         else:
-            wb.close()
-
-    return eliminado
-
-def leer_historial_ventas():
-    if not os.path.exists(HISTORIAL_JSON): return []
-    with open(HISTORIAL_JSON, 'r', encoding='utf-8') as f:
-        try:
-            return json.load(f)
-        except Exception:
-            return []
+            # Unknown historical costs must never be invented on re-export.
+            if any('costo_unitario' not in item for item in sale['items']):
+                raise CatalogError('La venta histórica no conserva costos; requiere conciliación manual.')
+            income = Decimal(sale['total_final'])
+            lab, supplies = Decimal('0'), Decimal('0')
+            for item in sale['items']:
+                count = item['cantidad']
+                if sale['destino'] == 'General':
+                    lab += Decimal(item['costo_lab']) * count
+                    supplies += Decimal(item['costo_insumo']) * count
+                elif any(word in item['categoria'].lower() for word in ('insumo', 'medicamento')):
+                    supplies += Decimal(item['costo_unitario']) * count
+                else:
+                    lab += Decimal(item['costo_unitario']) * count
+            observation = sale.get('observaciones', '')
+            if sale.get('descuento_especial_activo'):
+                observation += ' | Desc: ' + sale['descuento_especial_razon']
+            values = [sale['fecha'].split(' ')[-1].replace('/', '.'),
+                      f"{sale['id_ticket_global']} | {sale['id_ticket_especifico']}", sale['metodo_pago'],
+                      sale['paciente']['nombre'], ', '.join(f"{i['nombre']} x{i['cantidad']}" for i in sale['items']),
+                      0, float(income), 0, float(lab), float(supplies), float(income - lab - supplies), '', observation]
+            row = matches[0] if matches else ws.max_row + 1
+            for duplicate in reversed(matches[1:]):
+                ws.delete_rows(duplicate)
+            for column, value in enumerate(values, 1):
+                cell = ws.cell(row, column, value)
+                if isinstance(value, str):
+                    cell.data_type = 's'  # user text beginning '=' is never an Excel formula
+        for row in range(2, ws.max_row + 1):
+            ws.cell(row, 12, '=K2' if row == 2 else f'=L{row-1}+K{row}')
+        from io import BytesIO
+        output = BytesIO()
+        wb.save(output)
+        atomic_bytes(path, output.getvalue())
+    finally:
+        wb.close()

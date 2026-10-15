@@ -1,243 +1,235 @@
+"""Local single-operator API. Importing this module never migrates live data."""
+import atexit
+import logging
 import os
-import pandas as pd
-import time
-from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS
-from decimal import Decimal
-from datetime import datetime
+from pathlib import Path
+import threading
+from urllib.parse import urlsplit
+import uuid
+
 from dotenv import load_dotenv
+from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.exceptions import HTTPException
 
-from models import Ticket, Paciente, ServicioItem
-from catalog_manager import (
-    cargar_catalogos, 
-    generar_nuevos_ids, 
-    registrar_venta_excel, 
-    guardar_historial_json, 
-    leer_historial_ventas,
-    desactivar_ticket_json,
-    eliminar_ticket_excel
-)
-from pdf_generator import generar_ticket_pdf
-from escpos_printer import imprimir_ticket_escpos
+from catalog_manager import CatalogError, cargar_catalogos
+from jobs import JobWorker
+from models import ValidationError, build_sale, now, quantity, text
+from receipt import clinic
+from storage import ConflictError, StorageError, Store, request_hash
 
-load_dotenv()
-app = Flask(__name__, static_folder='build', static_url_path='/')
-CORS(app)
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / '.env')
 
-CATALOGOS = cargar_catalogos()
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TICKETS_DIR = os.path.join(BASE_DIR, '..', 'Tickets')
+def create_app(config=None):
+    app = Flask(__name__, static_folder='build', static_url_path='/')
+    app.config.update(DATA_DIR=os.getenv('CONSULTORIO_DATA_DIR', str(ROOT / 'data')),
+                      TICKETS_DIR=os.getenv('CONSULTORIO_TICKETS_DIR', str(ROOT / 'Tickets')),
+                      START_WORKER=True, AUTO_BACKUP=True, PRINT_COPIES=2,
+                      MAX_CONTENT_LENGTH=256 * 1024, DEVELOPMENT_ORIGIN=os.getenv('CONSULTORIO_DEV_ORIGIN'))
+    if config:
+        app.config.update(config)
+    store = Store(app.config['DATA_DIR'], app.config['TICKETS_DIR'])
+    worker = JobWorker(store, app.config.get('PRINTER'))
+    app.extensions.update(store=store, worker=worker)
+    ready_lock = threading.Lock()
+    prepared = False
 
-if not os.path.exists(TICKETS_DIR): 
-    os.makedirs(TICKETS_DIR)
+    def prepare():
+        nonlocal prepared
+        with ready_lock:
+            if prepared:
+                return
+            cargar_catalogos(store.data_dir)
+            store.initialize()
+            if app.config['AUTO_BACKUP']:
+                destination = store.data_dir / 'backups' / ('daily-' + now().strftime('%Y%m%d'))
+                if not (destination / 'BACKUP_COMPLETE').exists():
+                    # A failed/incomplete backup is never silently considered successful.
+                    if destination.exists():
+                        destination = destination.with_name(destination.name + '-' + uuid.uuid4().hex[:8])
+                    store.backup(destination)
+            if app.config['START_WORKER']:
+                worker.start()
+                atexit.register(worker.stop)
+            prepared = True
+    app.extensions['prepare'] = prepare
 
-# ==============================================================================
-# 🌐 DESTRUCCIÓN DE CACHÉ PARA EVITAR CONGELAMIENTO EN EL NAVEGADOR
-# ==============================================================================
-@app.route("/")
-def serve_index(): 
-    response = send_from_directory(app.static_folder, 'index.html')
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
+    @app.before_request
+    def protect_local_api():
+        if request.path.startswith('/api/'):
+            if urlsplit('http://' + request.host).hostname not in ('localhost', '127.0.0.1', '[::1]', '::1'):
+                return jsonify(error='Acceso permitido únicamente desde este equipo.'), 403
+            origin = request.headers.get('Origin')
+            if origin and origin not in (request.host_url.rstrip('/'), app.config['DEVELOPMENT_ORIGIN']):
+                return jsonify(error='Origen de solicitud no permitido.'), 403
+            if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+                if request.headers.get('X-Local-Request') != '1':
+                    return jsonify(error='Solicitud local inválida. Actualice la interfaz.'), 403
+            prepare()
 
-@app.route('/<path:path>')
-def serve_static(path):
-    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, 'index.html')
+    @app.after_request
+    def headers(response):
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'same-origin'
+        if request.path.startswith('/api/') or request.path == '/':
+            response.headers['Cache-Control'] = 'no-store'
+        return response
 
-@app.route("/api/catalogos", methods=["GET"])
-def get_catalogos():
-    return jsonify({
-        "general": CATALOGOS["General"].fillna(0).to_dict(orient="records"),
-        "dental": CATALOGOS["Dental"].fillna(0).to_dict(orient="records")
-    })
+    def body():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ValidationError('Se requiere un objeto JSON válido.')
+        return data
 
-@app.route("/api/tickets", methods=["GET"])
-def get_historial(): 
-    return jsonify(leer_historial_ventas())
+    @app.errorhandler(ValidationError)
+    def invalid(exc):
+        return jsonify(error=str(exc)), 409 if isinstance(exc, ConflictError) else 422
 
-@app.route("/api/registrar-venta", methods=["POST"])
-def registrar():
-    data = request.json
+    @app.errorhandler(CatalogError)
+    @app.errorhandler(StorageError)
+    def unavailable(exc):
+        app.logger.error('Local data unavailable (%s)', type(exc).__name__)
+        return jsonify(error=str(exc)), 503
+
+    @app.errorhandler(Exception)
+    def unexpected(exc):
+        if isinstance(exc, HTTPException):
+            return jsonify(error=exc.description), exc.code
+        error_id = uuid.uuid4().hex[:12]
+        app.logger.error('Operation %s failed (%s)', error_id, type(exc).__name__)
+        return jsonify(error=f'No se pudo completar la operación. Referencia: {error_id}.'), 500
+
+    @app.get('/api/health')
+    def health():
+        return jsonify(status='ok', application='consultorio-ticket-manager', storage='sqlite', version=2)
+
+    @app.get('/api/catalogos')
+    def catalogs():
+        return jsonify(cargar_catalogos(store.data_dir))
+
+    @app.get('/api/configuracion')
+    def configuration():
+        return jsonify(clinic())
+
+    @app.get('/api/tickets')
+    def history():
+        # Keep the existing response shape for compatibility; filtering is also available.
+        sales = store.history()
+        query = request.args.get('q', '').strip().casefold()
+        if query:
+            sales = [s for s in sales if query in (s['id_ticket_global'] + ' ' + s['paciente'].get('nombre', '') + ' ' + s['paciente'].get('dni', '')).casefold()]
+        return jsonify(sales)
+
+    @app.post('/api/registrar-venta')
+    def register():
+        data = body()
+        key = text(request.headers.get('Idempotency-Key'), 'Clave de operación', 80)
+        try:
+            uuid.UUID(key)
+        except ValueError:
+            raise ValidationError('Clave de operación inválida.') from None
+        fingerprint = request_hash(data)
+        # Look up before catalog validation: a retry must survive later price changes.
+        sale = store.existing(key, fingerprint)
+        replay = sale is not None
+        if sale is None:
+            sale, created = store.register(build_sale(data, cargar_catalogos(store.data_dir)), key, fingerprint,
+                                           quantity(app.config['PRINT_COPIES'], 5))
+            replay = not created
+        worker.notify()
+        return jsonify(message='Venta registrada. Consulte el estado de documentos e impresión en el historial.',
+                       ticket_id=sale['id_ticket_global'], total_final=sale['total_final'],
+                       path=sale['id_ticket_global'] + '.pdf', replayed=replay,
+                       jobs=store.jobs(sale['id_ticket_global']))
+
+    @app.delete('/api/eliminar-ticket/<ident>')
+    def cancel(ident):
+        reason = text(body().get('motivo'), 'Motivo de anulación', 300)
+        if not store.cancel(ident, reason):
+            return jsonify(error='Ticket no encontrado.'), 404
+        worker.notify()
+        return jsonify(message='Ticket anulado; la actualización de Excel se ha encolado.', jobs=store.jobs(ident))
+
+    @app.get('/api/tickets/<ident>/estado')
+    def status(ident):
+        if store.get(ident) is None:
+            return jsonify(error='Ticket no encontrado.'), 404
+        return jsonify(jobs=store.jobs(ident))
+
+    @app.post('/api/tickets/<ident>/reintentar-documentos')
+    def retry(ident):
+        if store.get(ident) is None:
+            return jsonify(error='Ticket no encontrado.'), 404
+        store.retry_documents(ident)
+        worker.notify()
+        return jsonify(message='Documentos pendientes de actualización.')
+
+    @app.post('/api/reimprimir-ticket')
+    def reprint():
+        data = body()
+        ident = text(data.get('id_ticket_global'), 'Ticket', 80)
+        copies = quantity(data.get('cantidad', 1), 5)
+        sale = store.get(ident)
+        if sale is None:
+            return jsonify(error='Ticket no encontrado.'), 404
+        if sale.get('habilitado') is False:
+            raise ValidationError('No se puede reimprimir un ticket anulado.')
+        store.queue_print(ident, copies)
+        worker.notify()
+        return jsonify(message='Reimpresión encolada. Consulte su estado en el historial.')
+
+    @app.get('/api/tickets/<ident>/pdf')
+    def pdf(ident):
+        if store.get(ident) is None:
+            return jsonify(error='Ticket no encontrado.'), 404
+        return send_from_directory(store.tickets_dir, ident + '.pdf', mimetype='application/pdf')
+
+    @app.get('/')
+    def index():
+        if not (Path(app.static_folder) / 'index.html').exists():
+            return 'Falta compilar la interfaz. Consulte docs/README.md.', 503
+        return send_from_directory(app.static_folder, 'index.html')
+
+    @app.get('/<path:path>')
+    def static_or_index(path):
+        if path.startswith('api/'):
+            return jsonify(error='Endpoint no encontrado.'), 404
+        candidate = (Path(app.static_folder) / path).resolve()
+        if candidate.is_relative_to(Path(app.static_folder).resolve()) and candidate.is_file():
+            return send_from_directory(app.static_folder, path)
+        if '.' in path:
+            return '', 404
+        return index()
+    return app
+
+app = create_app()
+
+if __name__ == '__main__':
+    import argparse
+    import socket
+    import sys
+    from waitress import create_server
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--open-browser', action='store_true')
+    options = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+    # Bind before migration, so a second launch cannot reset in-flight jobs.
     try:
-        paciente = Paciente(nombre=data["paciente"]["nombre"], dni=data["paciente"]["dni"])
-        destino = data["destino"].capitalize()
-        cat = CATALOGOS[destino]
-        id_col = "ID_General" if data["destino"].lower() == "general" else "ID_Dental"
-        
-        def to_decimal(value):
-            if pd.isna(value) or str(value).strip() == "":
-                return Decimal("0.00")
-            clean_value = str(value).strip().replace(',', '.')
-            clean_value = "".join(c for c in clean_value if c.isdigit() or c == '.')
-            try: return Decimal(clean_value)
-            except: return Decimal("0.00")
-
-        items_objs = []
-        for it in data["items"]:
-            # --- INTERCEPCIÓN COMODÍN "OTROS" ---
-            if it["id"] == "OTROS":
-                precio_libre = to_decimal(it.get("precio_unitario", 0))
-                item = ServicioItem(
-                    categoria="OTROS",
-                    nombre_especifico=it["nombre"],
-                    precio_unitario=precio_libre,
-                    costo_unitario=Decimal("0.00"),
-                    cantidad=int(it["cantidad"]),
-                    descuento=Decimal("0.00")
-                )
-                item.costo_lab = Decimal("0.00")
-                item.costo_insumo = Decimal("0.00")
-                items_objs.append(item)
-                continue
-
-            # Búsqueda normal si no es un ítem comodín libre
-            row = cat[cat[id_col] == it["id"]].iloc[0]
-            precio = to_decimal(row.get("Precio Unitario", 0))
-            descuento_p = to_decimal(row.get("Descuento", 0))
-            
-            if destino.lower() == 'general':
-                c_lab = to_decimal(row.get("Costo Laboratorio", 0))
-                c_ins = to_decimal(row.get("Costo Insumos", 0))
-                costo_para_modelo = c_lab + c_ins
-            else:
-                costo_para_modelo = to_decimal(row.get("Costo", 0))
-                c_lab = Decimal("0.00")
-                c_ins = Decimal("0.00")
-
-            item = ServicioItem(
-                categoria=row.get("Categoría", ""),
-                nombre_especifico=it["nombre"],
-                precio_unitario=precio,
-                costo_unitario=costo_para_modelo,
-                cantidad=int(it["cantidad"]),
-                descuento=descuento_p
-            )
-
-            if destino.lower() == 'general':
-                item.costo_lab = c_lab
-                item.costo_insumo = c_ins
-            
-            items_objs.append(item)
-
-        ticket = Ticket(paciente=paciente, items=items_objs, metodo_pago=data["metodo_pago"], destino=destino)
-        id_glob, id_esp = generar_nuevos_ids(destino)
-        
-        subtotal_servicios = sum(i.subtotal for i in items_objs)
-        desc_valor = to_decimal(data.get("descuento_especial_valor", 0))
-        monto_descuento_especial = to_decimal(data.get("descuento_especial_monto_soles", 0))
-        
-        desc_activo = data.get("descuento_especial_activo", False)
-        desc_tipo = data.get("descuento_especial_tipo", "percent")
-        desc_razon = data.get("descuento_especial_razon", "")
-                
-        total_final_calculado = max(Decimal("0.00"), subtotal_servicios - monto_descuento_especial)
-        ticket.total_final = total_final_calculado 
-        
-        # --- INYECCIÓN DE DATOS DE MÚLTIPLES MÉTODOS DE PAGO ---
-        venta_final = {
-            "id_ticket_global": id_glob,
-            "id_ticket_especifico": id_esp,
-            "fecha": datetime.now().strftime("%H:%M:%S %d/%m/%y"),
-            "paciente": {"nombre": paciente.nombre, "dni": paciente.dni},
-            "items": [{"nombre": i.nombre_especifico, "cantidad": i.cantidad, "precio_unitario": str(i.precio_unitario), "subtotal": str(i.subtotal)} for i in items_objs],
-            "subtotal_servicios": str(subtotal_servicios),
-            "descuento_especial_activo": desc_activo,
-            "descuento_especial_tipo": desc_tipo,
-            "descuento_especial_valor": str(desc_valor),
-            "descuento_especial_monto_soles": str(monto_descuento_especial),
-            "descuento_especial_razon": desc_razon,
-            "observaciones": data.get("observaciones", ""),
-            "total_final": str(total_final_calculado),
-            "metodo_pago": ticket.metodo_pago,
-            "pago_con": str(data.get("pago_con", 0)),
-            "vuelto": str(data.get("vuelto", 0)),
-            "desglose_pagos": data.get("desglose_pagos", []),
-            "destino": ticket.destino,
-            "habilitado": True,
-            "atendido_por": "José Melgar"
-        }
-
-        # Guarda en el Excel correspondiente (General -> Las Marianas | Dental -> Dental)
-        registrar_venta_excel(ticket, id_glob, id_esp, venta_final)
-        guardar_historial_json(venta_final)
-        
-        nombre_limpio = "".join(x for x in paciente.nombre if x.isalnum() or x == " ").replace(" ", "_").upper()
-        pdf_name = f"{nombre_limpio}_{id_glob}.pdf"
-        pdf_path = os.path.join(TICKETS_DIR, pdf_name)
-        with open(pdf_path, "wb") as f:
-            f.write(generar_ticket_pdf(venta_final))
-        
-        # Impresión térmica en físico
-        imprimir_ticket_escpos(venta_final)
-        time.sleep(2.5)
-        imprimir_ticket_escpos(venta_final)
-        
-        return jsonify({"message": "Venta exitosa", "ticket_id": id_glob, "path": pdf_name}), 200
-
-    except Exception as e:
-        import traceback
-        print(f"Error: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/eliminar-ticket/<id_global>", methods=["DELETE"])
-def eliminar_ticket(id_global):
+        server = create_server(app, host='127.0.0.1', port=5000, threads=4)
+    except OSError:
+        print('El puerto 5000 está ocupado. Cierre la otra instancia antes de iniciar.')
+        sys.exit(1)
     try:
-        payload = request.get_json(silent=True) or {}
-        motivo_req = payload.get("motivo", "").strip()
-        motivo = motivo_req if motivo_req else "No se especificó motivo"
-
-        # 1. En el JSON se apaga el switch interno y se almacena la justificación
-        json_ok = desactivar_ticket_json(id_global, motivo)
-        
-        # 2. En el Excel sí se elimina la fila para mantener cuadrada la caja
-        excel_ok = eliminar_ticket_excel(id_global)
-        
-        # 3. El archivo PDF NO se elimina: se preserva en disco como respaldo
-        if json_ok or excel_ok:
-            return jsonify({
-                "message": f"Ticket {id_global} retirado de la contabilidad.",
-                "motivo_registrado": motivo,
-                "ocultado_en_historial": json_ok,
-                "eliminado_de_excel": excel_ok
-            }), 200
-        else:
-            return jsonify({"error": "El ID de ticket no existe en el sistema."}), 404
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-@app.route("/api/reimprimir-ticket", methods=["POST"])
-def reimprimir_ticket():
-    data = request.json
-    id_global = data.get("id_ticket_global")
-    cantidad_copias = int(data.get("cantidad", 1))
-
-    try:
-        tickets = leer_historial_ventas()
-        
-        ticket_encontrado = None
-        for t in tickets:
-            if t["id_ticket_global"] == id_global:
-                ticket_encontrado = t
-                break
-        
-        if not ticket_encontrado:
-            return jsonify({"error": "Ticket no encontrado en el archivo de ventas."}), 404
-
-        for i in range(cantidad_copias):
-            imprimir_ticket_escpos(ticket_encontrado) 
-            if i < cantidad_copias - 1:
-                time.sleep(2.5)
-
-        return jsonify({"message": f"Se enviaron {cantidad_copias} copias correctamente."}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000, debug=True)
+        app.extensions['prepare']()
+        if options.open_browser:
+            import webbrowser
+            threading.Timer(1, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
+        print('Sistema activo en http://127.0.0.1:5000. Use Ctrl+C para apagar.')
+        server.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        app.extensions['worker'].stop()
+        server.close()
+        server.task_dispatcher.shutdown()

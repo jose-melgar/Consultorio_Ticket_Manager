@@ -1,439 +1,123 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { api, ApiError, amount, cents, operationKey, stored } from '../api';
 import '../styles.css';
 
-interface ServicioAPI {
-  "ID_General"?: string;
-  "ID_Dental"?: string;
-  "Categoría": string;
-  "Nombre Específico": string;
-  "Precio Unitario": number;
-}
+interface Service { ID_General?: string; ID_Dental?: string; 'Categoría': string; 'Nombre Específico': string; 'Precio Unitario': string; Descuento: string; }
+interface CartItem { lineId: string; id: string; nombre: string; cantidad: number; price: number; discount: number; }
+interface Payment { metodo: string; monto: string; }
+interface Draft { nombre: string; dni: string; destino: 'general' | 'dental'; items: CartItem[]; pagos: Payment[]; observaciones: string; activo: boolean; tipo: 'percent' | 'fixed'; valor: string; razon: string; }
+interface Pending { key: string; body: string; }
+const EMPTY: Draft = { nombre: '', dni: '', destino: 'general', items: [], pagos: [], observaciones: '', activo: false, tipo: 'percent', valor: '', razon: '' };
+const METHODS = ['Efectivo', 'Yape', 'Plin', 'Tarjeta', 'Transferencia'];
 
-interface TicketItem {
-  id: string;
-  nombre: string;
-  cantidad: number;
-  precioUnitario: number;
-  subtotal: number;
-}
-
-// Interfaz para la lista dinámica de pagos (Boceto de José)
-interface PagoMetodo {
-  metodo: string;
-  monto: number;
-}
-
-interface ServiceFormProps {
-  prefilledPatient?: { nombre: string; dni: string } | null;
-}
-
-const ServiceForm: React.FC<ServiceFormProps> = ({ prefilledPatient }) => {
-  const [patientName, setPatientName] = useState('');
-  const [patientDNI, setPatientDNI] = useState('');
-  const [catalogos, setCatalogos] = useState<{ general: ServicioAPI[], dental: ServicioAPI[] }>({ general: [], dental: [] });
-  const [selectedDestino, setSelectedDestino] = useState<'general' | 'dental'>('general');
-  const [selectedCategoria, setSelectedCategoria] = useState('');
-  const [selectedServicio, setSelectedServicio] = useState('');
-  const [cantidad, setCantidad] = useState<number>(1);
-  const [ticketItems, setTicketItems] = useState<TicketItem[]>([]);
-  const [observaciones, setObservaciones] = useState('');
-
-  // --- NUEVOS ESTADOS PARA CONCEPTO "OTROS" ---
-  const [customNombre, setCustomNombre] = useState('');
-  const [customPrecio, setCustomPrecio] = useState<number | ''>('');
-
-  const [hasSpecialDiscount, setHasSpecialDiscount] = useState(false);
-  const [specialDiscountType, setSpecialDiscountType] = useState<'percent' | 'fixed'>('percent');
-  const [specialDiscountValue, setSpecialDiscountValue] = useState<number | ''>('');
-  const [specialDiscountReason, setSpecialDiscountReason] = useState('');
-
-  // --- ESTADOS PARA MÚLTIPLES MÉTODOS DE PAGO (BOCETO DE JOSÉ) ---
-  const [metodoSeleccionado, setMetodoSeleccionado] = useState('');
-  const [listaPagos, setListaPagos] = useState<PagoMetodo[]>([]);
-
-  // --- ESTADO PARA CONTROLAR ENVÍO ÚNICO (PREVENCIÓN DE CLICS MÚLTIPLES) ---
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Cargar datos prellenados únicamente si vienen desde el botón "Cargar" del Historial
+const ServiceForm: React.FC<{ prefilledPatient?: { nombre: string; dni: string } | null; onPatientLoaded?: () => void }> = ({ prefilledPatient, onPatientLoaded }) => {
+  const [draft, setDraft] = useState<Draft>(() => stored('ticket-draft-v2', EMPTY));
+  const [pending, setPending] = useState<Pending | null>(() => stored('ticket-pending-v2', null));
+  const [catalogs, setCatalogs] = useState<{ general: Service[]; dental: Service[] }>({ general: [], dental: [] });
+  const [category, setCategory] = useState('');
+  const [serviceId, setServiceId] = useState('');
+  const [quantity, setQuantity] = useState(1);
+  const [customName, setCustomName] = useState('');
+  const [customPrice, setCustomPrice] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const sending = useRef(false);
+  const update = (value: Partial<Draft>) => setDraft(previous => ({ ...previous, ...value }));
+  const locked = busy || pending !== null;
+  const loadCatalogs = useCallback(() => api<{ general: Service[]; dental: Service[] }>('/api/catalogos').then(setCatalogs).catch(error => setMessage(error.message)), []);
+  useEffect(() => { void loadCatalogs(); }, [loadCatalogs]);
+  useEffect(() => { sessionStorage.setItem('ticket-draft-v2', JSON.stringify(draft)); }, [draft]);
   useEffect(() => {
-    if (prefilledPatient) {
-      setPatientName(prefilledPatient.nombre);
-      setPatientDNI(prefilledPatient.dni);
+    if (prefilledPatient && !pending) {
+      setDraft(previous => ({ ...previous, ...prefilledPatient }));
+      onPatientLoaded?.();
     }
-  }, [prefilledPatient]);
+  }, [prefilledPatient, pending, onPatientLoaded]);
+  const services = catalogs[draft.destino];
+  const categories = Array.from(new Set([...services.map(s => s.Categoría), 'OTROS']));
+  const subtotal = draft.items.reduce((sum, item) => sum + (item.price - item.discount) * item.cantidad, 0);
+  const discount = draft.activo ? (draft.tipo === 'percent' ? Math.round(subtotal * cents(draft.valor) / 10000) : cents(draft.valor)) : 0;
+  const total = Math.max(0, subtotal - discount);
+  const received = draft.pagos.reduce((sum, p) => sum + cents(p.monto), 0);
+  const change = Math.max(0, received - total);
+  const cash = draft.pagos.filter(p => p.metodo === 'Efectivo').reduce((sum, p) => sum + cents(p.monto), 0);
 
-  useEffect(() => {
-    fetch('http://localhost:5000/api/catalogos')
-      .then(response => response.json())
-      .then(data => setCatalogos(data))
-      .catch(err => console.error("Error al cargar catalogos:", err));
-  }, []);
-
-  const { categoriasDisponibles, serviciosDisponibles, servicioSeleccionadoInfo } = useMemo(() => {
-    const catalogoActual = catalogos[selectedDestino] || [];
-    const categorias = [...new Set(catalogoActual.map(s => s.Categoría))];
-    
-    if (!categorias.includes("OTROS")) {
-      categorias.push("OTROS");
-    }
-
-    const servicios = selectedCategoria ? catalogoActual.filter(s => s.Categoría === selectedCategoria) : [];
-    const servicioInfo = selectedServicio ? servicios.find(s => (s["ID_General"] || s["ID_Dental"]) === selectedServicio) : undefined;
-    
-    return { categoriasDisponibles: categorias, serviciosDisponibles: servicios, servicioSeleccionadoInfo: servicioInfo };
-  }, [selectedDestino, selectedCategoria, selectedServicio, catalogos]);
-
-  const subtotalServicios = useMemo(() => ticketItems.reduce((acc, item) => acc + item.subtotal, 0), [ticketItems]);
-  
-  const totalCalculado = useMemo(() => {
-    let total = subtotalServicios;
-    if (hasSpecialDiscount && specialDiscountValue) {
-      const val = Number(specialDiscountValue);
-      if (specialDiscountType === 'percent') {
-        total = subtotalServicios - (subtotalServicios * (val / 100));
-      } else {
-        total = subtotalServicios - val;
-      }
-    }
-    return Math.max(0, total);
-  }, [subtotalServicios, hasSpecialDiscount, specialDiscountType, specialDiscountValue]);
-
-  // --- CÁLCULOS MATEMÁTICOS DE CAJA EN TIEMPO REAL ---
-  const totalIngresado = useMemo(() => listaPagos.reduce((acc, p) => acc + p.monto, 0), [listaPagos]);
-  const diferenciaCaja = useMemo(() => totalCalculado - totalIngresado, [totalCalculado, totalIngresado]);
-  const vueltoEntregar = useMemo(() => Math.max(0, totalIngresado - totalCalculado), [totalIngresado, totalCalculado]);
-
-  // Formatear la celda única del Excel automáticamente: "Yape(100), Efectivo(-50)"
-  const metodoPagoExcelString = useMemo(() => {
-    let base = listaPagos.map(p => `${p.metodo}(${p.monto})`).join(', ');
-    if (vueltoEntregar > 0) {
-      base += `, Vuelto(-${vueltoEntregar})`;
-    }
-    return base;
-  }, [listaPagos, vueltoEntregar]);
-
-  const handleAddPaymentMethod = () => {
-    if (!metodoSeleccionado) return;
-    if (listaPagos.some(p => p.metodo === metodoSeleccionado)) {
-      alert("Este método de pago ya está en la lista. Modifique su monto directamente.");
-      return;
-    }
-    // Sugerir automáticamente el saldo restante que falta cobrar
-    const restante = Math.max(0, diferenciaCaja);
-    setListaPagos([...listaPagos, { metodo: metodoSeleccionado, monto: restante }]);
-    setMetodoSeleccionado('');
+  const addItem = () => {
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) { setMessage('La cantidad debe ser un entero entre 1 y 999.'); return; }
+    const service = services.find(s => (s.ID_General || s.ID_Dental) === serviceId);
+    if (category === 'OTROS' && (!customName.trim() || customPrice === '' || Number(customPrice) < 0)) { setMessage('Ingrese concepto y precio válido.'); return; }
+    if (category !== 'OTROS' && !service) return;
+    const item: CartItem = { lineId: operationKey(), id: service ? (service.ID_General || service.ID_Dental)! : 'OTROS',
+      nombre: service ? service['Nombre Específico'] : customName.trim().toUpperCase(), cantidad: quantity,
+      price: cents(service ? service['Precio Unitario'] : customPrice), discount: service ? cents(service.Descuento || 0) : 0 };
+    update({ items: [...draft.items, item] });
+    setQuantity(1); setServiceId(''); setCustomName(''); setCustomPrice(''); setMessage('');
   };
-
-  const handleUpdatePaymentAmount = (index: number, val: number) => {
-    const nuevaLista = [...listaPagos];
-    nuevaLista[index].monto = Math.max(0, val);
-    setListaPagos(nuevaLista);
-  };
-
-  const handleRemovePaymentMethod = (index: number) => {
-    setListaPagos(listaPagos.filter((_, i) => i !== index));
-  };
-
-  const handleAddItem = () => {
-    if (selectedCategoria === "OTROS") {
-      if (!customNombre.trim() || customPrecio === '' || Number(customPrecio) < 0) {
-        alert("Por favor ingrese el nombre del concepto y un precio válido.");
-        return;
-      }
-      const newItem: TicketItem = {
-        id: "OTROS",
-        nombre: customNombre.trim().toUpperCase(),
-        cantidad: cantidad,
-        precioUnitario: Number(customPrecio),
-        subtotal: Number(customPrecio) * cantidad
-      };
-      setTicketItems(prev => [...prev, newItem]);
-      setCustomNombre('');
-      setCustomPrecio('');
-      setSelectedCategoria('');
-      setSelectedServicio('');
-      setCantidad(1);
-      return;
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (sending.current) return;
+    if (!pending && (!draft.items.length || received < total || change > cash || discount > subtotal)) { setMessage('Revise servicios, descuento y pagos. El vuelto debe estar cubierto por efectivo.'); return; }
+    let operation = pending;
+    if (!operation) {
+      operation = { key: operationKey(), body: JSON.stringify({ paciente: { nombre: draft.nombre, dni: draft.dni },
+        destino: draft.destino, items: draft.items.map(i => ({ id: i.id, nombre: i.nombre, cantidad: i.cantidad, precio_unitario: amount(i.price) })),
+        desglose_pagos: draft.pagos.map(p => ({ metodo: p.metodo, monto: amount(cents(p.monto)) })),
+        descuento_especial_activo: draft.activo, descuento_especial_tipo: draft.tipo, descuento_especial_valor: draft.valor || '0',
+        descuento_especial_razon: draft.razon, observaciones: draft.observaciones, total_esperado: amount(total) }) };
+      // Persist the exact request BEFORE sending. A network retry uses the same operation and body.
+      sessionStorage.setItem('ticket-pending-v2', JSON.stringify(operation));
+      setPending(operation);
     }
-
-    if (!servicioSeleccionadoInfo || cantidad <= 0) return;
-    const newItem: TicketItem = {
-      id: servicioSeleccionadoInfo["ID_General"] || servicioSeleccionadoInfo["ID_Dental"]!,
-      nombre: servicioSeleccionadoInfo["Nombre Específico"],
-      cantidad: cantidad,
-      precioUnitario: servicioSeleccionadoInfo["Precio Unitario"],
-      subtotal: servicioSeleccionadoInfo["Precio Unitario"] * cantidad
-    };
-    setTicketItems(prev => [...prev, newItem]);
-    setSelectedServicio('');
-    setCantidad(1);
-  };
-
-  const handleRemoveItem = (idToRemove: string) => {
-    setTicketItems(prev => prev.filter(item => item.id !== idToRemove));
-  };
-
-  const handleAnularVenta = () => {
-    if (window.confirm("¿Está seguro de que desea anular esta operación? Se borrarán todos los datos actuales.")) {
-      setTicketItems([]);
-      setListaPagos([]);
-      setPatientName('');
-      setPatientDNI('');
-      setHasSpecialDiscount(false);
-      setSpecialDiscountValue('');
-      setSpecialDiscountReason('');
-      setObservaciones('');
-      setSelectedCategoria('');
-      setSelectedServicio('');
-      setCustomNombre('');
-      setCustomPrecio('');
-      setCantidad(1);
-    }
-  };
-
-  const handleFinalizarVenta = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isSubmitting) return; // Bloqueo de seguridad inmediato contra clics múltiples
-    if (!ticketItems.length || !patientName || patientDNI.length !== 8) return;
-    if (diferenciaCaja > 0) return; // Bloqueo de seguridad secundario
-
-    if (hasSpecialDiscount && !specialDiscountReason.trim()) {
-        alert("Por favor, ingrese el motivo del descuento especial.");
-        return;
-    }
-
-    setIsSubmitting(true); // Se bloquea el botón
-
-    const ventaData = {
-      paciente: { nombre: patientName, dni: patientDNI },
-      items: ticketItems.map(item => ({ 
-        id: item.id, 
-        nombre: item.nombre, 
-        cantidad: item.cantidad,
-        precio_unitario: item.precioUnitario 
-      })),
-      metodo_pago: metodoPagoExcelString, // Cadena formateada para el Excel
-      pago_con: totalIngresado,
-      vuelto: vueltoEntregar,
-      desglose_pagos: listaPagos, // Enviado para que la ticketera imprima el desglose
-      destino: selectedDestino,
-      descuento_especial_activo: hasSpecialDiscount,
-      descuento_especial_tipo: specialDiscountType,
-      descuento_especial_valor: Number(specialDiscountValue) || 0,
-      descuento_especial_monto_soles: subtotalServicios - totalCalculado,
-      descuento_especial_razon: specialDiscountReason,
-      observaciones: observaciones
-    };
-
+    sending.current = true; setBusy(true);
     try {
-      const response = await fetch('http://localhost:5000/api/registrar-venta', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ventaData)
-      });
-
-      if (response.ok) {
-          const result = await response.json();
-          alert(`Ticket ${result.ticket_id} generado correctamente.`);
-          setTicketItems([]);
-          setListaPagos([]);
-          setPatientName('');
-          setPatientDNI('');
-          setHasSpecialDiscount(false);
-          setSpecialDiscountValue('');
-          setSpecialDiscountReason('');
-          setObservaciones('');
-      } else {
-          alert("Error al registrar la venta.");
-      }
+      const result = await api<{ message: string; ticket_id: string; total_final: string }>('/api/registrar-venta', {
+        method: 'POST', headers: { 'Idempotency-Key': operation.key }, body: operation.body });
+      sessionStorage.removeItem('ticket-pending-v2'); setPending(null);
+      setDraft({ ...EMPTY, items: [], pagos: [] });
+      setMessage(`Ticket ${result.ticket_id} registrado por S/. ${result.total_final}. ${result.message}`);
     } catch (error) {
-      alert("Error de conexión con el servidor.");
-    } finally {
-      setIsSubmitting(false); // Se libera el botón cuando termina el proceso
-    }
+      if (error instanceof ApiError && error.status === 422) {
+        sessionStorage.removeItem('ticket-pending-v2'); setPending(null);
+        setMessage(error.message);
+      } else {
+        setMessage(`${error instanceof Error ? error.message : 'Error de conexión.'} Reintente esta misma operación; no vuelva a cobrar.`);
+      }
+    } finally { sending.current = false; setBusy(false); }
   };
-
-  return (
-    <div className="form-container">
-      <form onSubmit={handleFinalizarVenta}>
-        <fieldset>
-          <legend>Datos del Paciente</legend>
-          <label>Nombre: <input type="text" value={patientName} onChange={e => setPatientName(e.target.value.toUpperCase())} required/></label>
-          <label>DNI: <input type="text" value={patientDNI} onChange={e => setPatientDNI(e.target.value.replace(/\D/g, ''))} maxLength={8} placeholder="8 dígitos" required/></label>
-        </fieldset>
-
-        <fieldset>
-          <legend>Añadir Servicio</legend>
-          <label>Destino:
-            <select value={selectedDestino} onChange={e => { setSelectedDestino(e.target.value as any); setSelectedCategoria(''); setSelectedServicio(''); }}>
-              <option value="general">Las Marianas</option>
-              <option value="dental">Dental</option>
-            </select>
-          </label>
-          <label>Categoría:
-            <select value={selectedCategoria} onChange={e => { setSelectedCategoria(e.target.value); setSelectedServicio(e.target.value === "OTROS" ? "OTROS" : ""); }}>
-              <option value="">Seleccione...</option>
-              {categoriasDisponibles.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-
-          {selectedCategoria === "OTROS" ? (
-            <>
-              <label>Concepto Personalizado:
-                <input type="text" placeholder="Ej. RECARGO MATERIAL" value={customNombre} onChange={e => setCustomNombre(e.target.value)} required />
-              </label>
-              <label>Precio (S/.):
-                <input type="number" min="0" step="0.01" placeholder="0.00" value={customPrecio} onChange={e => setCustomPrecio(e.target.value === '' ? '' : Number(e.target.value))} required />
-              </label>
-            </>
-          ) : (
-            <label>Servicio:
-              <select value={selectedServicio} onChange={e => setSelectedServicio(e.target.value)}>
-                <option value="">Seleccione...</option>
-                {serviciosDisponibles.map(s => <option key={s["ID_General"] || s["ID_Dental"]} value={s["ID_General"] || s["ID_Dental"]}>{s["Nombre Específico"]}</option>)}
-              </select>
-            </label>
-          )}
-
-          <label>Cantidad: 
-            <input type="number" value={cantidad === 0 ? '' : cantidad} onChange={e => setCantidad(e.target.value === '' ? 0 : Number(e.target.value))} onFocus={(e) => e.target.select()} min="1" />
-          </label>
-          <button type="button" onClick={handleAddItem} disabled={!selectedServicio && selectedCategoria !== "OTROS"}>Añadir</button>
-        </fieldset>
-
-        <fieldset className="special-discount-section">
-          <legend>
-            <input type="checkbox" checked={hasSpecialDiscount} onChange={(e) => setHasSpecialDiscount(e.target.checked)} /> Descuento Especial
-          </legend>
-          {hasSpecialDiscount && (
-            <div className="discount-controls">
-              <div className="dual-button">
-                <button type="button" className={specialDiscountType === 'percent' ? 'active' : ''} onClick={() => setSpecialDiscountType('percent')}>%</button>
-                <button type="button" className={specialDiscountType === 'fixed' ? 'active' : ''} onClick={() => setSpecialDiscountType('fixed')}>S/.</button>
-              </div>
-              <input type="number" min="0" step="0.01" placeholder={specialDiscountType === 'percent' ? "Porcentaje %" : "Monto Fijo S/."} value={specialDiscountValue} onChange={(e) => setSpecialDiscountValue(e.target.value === '' ? '' : Number(e.target.value))} required/>
-              <input type="text" placeholder="Razón del descuento" value={specialDiscountReason} onChange={(e) => setSpecialDiscountReason(e.target.value)} required/>
-            </div>
-          )}
-        </fieldset>
-
-        <fieldset>
-          <legend>Observaciones Adicionales</legend>
-          <textarea placeholder="Detalles adicionales..." value={observaciones} onChange={(e) => setObservaciones(e.target.value)} className="observaciones-input" rows={3}/>
-        </fieldset>
-
-        <fieldset>
-          <legend>Resumen de Venta</legend>
-          <table>
-            <thead><tr><th>Servicio</th><th>Cant.</th><th>Total</th><th>Acción</th></tr></thead>
-            <tbody>
-              {ticketItems.map((item, i) => (
-                <tr key={i}>
-                  <td>{item.nombre}</td>
-                  <td>{item.cantidad}</td>
-                  <td>S/. {item.subtotal.toFixed(2)}</td>
-                  <td><button type="button" onClick={() => handleRemoveItem(item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>❌</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          
-          {hasSpecialDiscount ? (
-             <div className="summary-totals">
-                <p>Subtotal: S/. {subtotalServicios.toFixed(2)}</p>
-                <p className="discount-text">Descuento: - S/. {(subtotalServicios - totalCalculado).toFixed(2)}</p>
-                <h3>Total a Pagar: S/. {totalCalculado.toFixed(2)}</h3>
-             </div>
-          ) : (
-             <h3>Total a Pagar: S/. {totalCalculado.toFixed(2)}</h3>
-          )}
-
-          {/* --- SUBMÓDULO: GESTIÓN DE MÚLTIPLES MÉTODOS DE PAGO --- */}
-          <div style={{ border: '1px solid #ccc', padding: '12px', borderRadius: '6px', marginTop: '15px', backgroundColor: '#f9f9f9' }}>
-            <h4 style={{ margin: '0 0 10px 0', color: '#333' }}>Control de Caja y Métodos de Pago</h4>
-            
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-              <select 
-                value={metodoSeleccionado} 
-                onChange={e => setMetodoSeleccionado(e.target.value)}
-                style={{ flex: 1, padding: '5px' }}
-              >
-                <option value="">Seleccione Método Pago...</option>
-                <option value="Efectivo">Efectivo</option>
-                <option value="Yape">Yape</option>
-                <option value="Plin">Plin</option>
-                <option value="Tarjeta">Tarjeta</option>
-                <option value="Transferencia">Transferencia</option>
-              </select>
-              <button 
-                type="button" 
-                onClick={handleAddPaymentMethod}
-                style={{ backgroundColor: '#28a745', color: 'white', padding: '5px 15px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' }}
-                title="Añadir método de pago"
-              >
-                ✓
-              </button>
-            </div>
-
-            {/* Lista dinámica de métodos agregados */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '10px' }}>
-              {listaPagos.map((pago, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#fff', padding: '6px', borderRadius: '4px', border: '1px solid #ddd' }}>
-                  <span style={{ fontWeight: 'bold', minWidth: '80px', fontSize: '13px' }}>{pago.metodo}:</span>
-                  <input 
-                    type="number" 
-                    min="0" 
-                    step="0.01"
-                    value={pago.monto === 0 ? '' : pago.monto}
-                    onChange={e => handleUpdatePaymentAmount(idx, e.target.value === '' ? 0 : Number(e.target.value))}
-                    placeholder="S/. 0.00"
-                    style={{ flex: 1, padding: '4px', fontSize: '13px' }}
-                    required
-                  />
-                  <button 
-                    type="button" 
-                    onClick={() => handleRemovePaymentMethod(idx)}
-                    style={{ backgroundColor: 'transparent', border: 'none', color: '#dc3545', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold' }}
-                  >
-                    ❌
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            {/* Alertas dinámicas y cálculo del vuelto absoluto en vivo */}
-            <div style={{ marginTop: '10px', fontSize: '14px', fontWeight: 'bold' }}>
-              <p style={{ margin: '3px 0', color: '#555' }}>Monto Registrado: S/. {totalIngresado.toFixed(2)}</p>
-              {diferenciaCaja > 0 ? (
-                <p style={{ margin: '3px 0', color: '#dc3545' }}>⚠️ Falta completar: S/. {diferenciaCaja.toFixed(2)}</p>
-              ) : (
-                <div style={{ borderTop: '1px dashed #ccc', paddingTop: '5px', marginTop: '5px' }}>
-                  <p style={{ margin: '3px 0', color: '#28a745' }}>✅ Monto Cubierto</p>
-                  {vueltoEntregar > 0 && (
-                    <p style={{ margin: '3px 0', color: '#007bff', fontSize: '16px' }}>💵 Entregar Vuelto Físico: S/. {vueltoEntregar.toFixed(2)}</p>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: '15px', marginTop: '20px' }}>
-            <button type="button" onClick={handleAnularVenta} style={{ backgroundColor: '#dc3545', color: 'white', cursor: 'pointer' }} disabled={(!ticketItems.length && !patientName && !patientDNI) || isSubmitting}>Anular Operación</button>
-            <button 
-              type="submit" 
-              style={{ 
-                backgroundColor: (diferenciaCaja > 0 || isSubmitting) ? '#ccc' : '#007bff', 
-                cursor: (diferenciaCaja > 0 || isSubmitting) ? 'not-allowed' : 'pointer' 
-              }} 
-              disabled={!ticketItems.length || !patientName || diferenciaCaja > 0 || isSubmitting}
-            >
-              {isSubmitting ? '⏳ Imprimiendo...' : 'Generar Ticket'}
-            </button>
-          </div>
-        </fieldset>
-      </form>
-    </div>
-  );
+  return <div className="form-container">
+    {message && <p role="status" className="status-message">{message}</p>}
+    {pending && <p role="alert">Hay una operación pendiente de confirmación. Reintente para recuperar su resultado sin duplicarla.</p>}
+    <form onSubmit={submit}>
+      <fieldset disabled={locked} className="patient-fields"><legend>Datos del paciente</legend>
+        <label className="patient-field"><span>Nombre</span><input type="text" autoComplete="name" required maxLength={200} value={draft.nombre} onChange={e => update({ nombre: e.target.value.toUpperCase() })}/></label>
+        <label className="patient-field"><span>DNI</span><input type="text" inputMode="numeric" autoComplete="off" required pattern="[0-9]{8}" maxLength={8} value={draft.dni} onChange={e => update({ dni: e.target.value.replace(/\D/g, '') })}/></label>
+      </fieldset>
+      <fieldset disabled={locked}><legend>Añadir servicio</legend>
+        <label>Destino<select disabled={draft.items.length > 0} value={draft.destino} onChange={e => { update({ destino: e.target.value as Draft['destino'] }); setCategory(''); setServiceId(''); }}><option value="general">Las Marianas</option><option value="dental">Dental</option></select></label>
+        <label>Categoría<select value={category} onChange={e => { setCategory(e.target.value); setServiceId(''); }}><option value="">Seleccione…</option>{categories.map(c => <option key={c}>{c}</option>)}</select></label>
+        {category === 'OTROS' ? <><label>Concepto<input maxLength={200} value={customName} onChange={e => setCustomName(e.target.value)}/></label><label>Precio<input type="number" min="0" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)}/></label></> :
+          <label>Servicio<select value={serviceId} onChange={e => setServiceId(e.target.value)}><option value="">Seleccione…</option>{services.filter(s => s.Categoría === category).map(s => <option key={s.ID_General || s.ID_Dental} value={s.ID_General || s.ID_Dental}>{s['Nombre Específico']}</option>)}</select></label>}
+        <label>Cantidad<input type="number" min="1" max="999" step="1" value={quantity} onChange={e => setQuantity(Number(e.target.value))}/></label>
+        <button type="button" onClick={addItem}>Añadir</button>{' '}<button type="button" onClick={loadCatalogs}>Actualizar catálogo</button>
+      </fieldset>
+      <fieldset disabled={locked}><legend>Resumen y descuento</legend>
+        <div className="table-scroll"><table><thead><tr><th>Servicio</th><th>Cantidad</th><th>Total</th><th>Acción</th></tr></thead><tbody>{draft.items.map(i => <tr key={i.lineId}><td>{i.nombre}</td><td>{i.cantidad}</td><td>S/. {amount((i.price - i.discount) * i.cantidad)}</td><td><button type="button" aria-label={`Quitar ${i.nombre}`} onClick={() => update({ items: draft.items.filter(x => x.lineId !== i.lineId) })}>Quitar</button></td></tr>)}</tbody></table></div>
+        <label><input type="checkbox" checked={draft.activo} onChange={e => update({ activo: e.target.checked })}/> Descuento especial</label>
+        {draft.activo && <><label>Tipo<select value={draft.tipo} onChange={e => update({ tipo: e.target.value as Draft['tipo'] })}><option value="percent">Porcentaje</option><option value="fixed">Monto en soles</option></select></label><label>Valor<input type="number" min="0" max={draft.tipo === 'percent' ? 100 : amount(subtotal)} step="0.01" required value={draft.valor} onChange={e => update({ valor: e.target.value })}/></label><label>Motivo<input required maxLength={300} value={draft.razon} onChange={e => update({ razon: e.target.value })}/></label></>}
+        <p>Subtotal: S/. {amount(subtotal)} · Descuento: S/. {amount(discount)}</p><h3>Total: S/. {amount(total)}</h3>
+        <label>Observaciones<textarea maxLength={2000} rows={3} className="observaciones-input" value={draft.observaciones} onChange={e => update({ observaciones: e.target.value })}/></label>
+      </fieldset>
+      <fieldset disabled={locked}><legend>Pagos</legend>
+        <label>Método<select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}><option value="">Seleccione…</option>{METHODS.filter(m => !draft.pagos.some(p => p.metodo === m)).map(m => <option key={m}>{m}</option>)}</select></label>
+        <button type="button" disabled={!paymentMethod} onClick={() => { update({ pagos: [...draft.pagos, { metodo: paymentMethod, monto: amount(Math.max(0, total - received)) }] }); setPaymentMethod(''); }}>Añadir pago</button>
+        {draft.pagos.map((p, index) => <div key={p.metodo} className="payment-row"><label>{p.metodo}<input required type="number" min="0.01" step="0.01" value={p.monto} onChange={e => update({ pagos: draft.pagos.map((x, n) => n === index ? { ...x, monto: e.target.value } : x) })}/></label><button type="button" onClick={() => update({ pagos: draft.pagos.filter((_, n) => n !== index) })}>Quitar</button></div>)}
+        <p>Recibido: S/. {amount(received)} · Falta: S/. {amount(Math.max(0, total - received))} · Vuelto: S/. {amount(change)}</p>
+        {change > cash && <p role="alert">El vuelto supera el efectivo recibido. Revise los pagos.</p>}
+      </fieldset>
+      <div className="form-actions"><button type="button" disabled={locked} onClick={() => { if (window.confirm('¿Descartar el borrador?')) { setDraft({ ...EMPTY, items: [], pagos: [] }); setCategory(''); setServiceId(''); } }}>Descartar borrador</button>
+        <button type="submit" disabled={busy || (!pending && (!draft.items.length || received < total || change > cash || discount > subtotal))}>{busy ? 'Registrando…' : pending ? 'Reintentar operación pendiente' : 'Registrar e imprimir'}</button></div>
+    </form>
+  </div>;
 };
-
 export default ServiceForm;
